@@ -5,7 +5,7 @@
   --text: #e6edf3;
   --muted: #8b949e;
   --accent: #58a6ff;
-  --deer: #c98a4b;
+  --deer: #00fce5;
   --tiger: #fc3e00;
   --green: #2ea043;
 }
@@ -150,3 +150,4 @@ body {
 .tiger-sw { background: var(--tiger); }
 .tigerj-sw { background: #f0a890; }
 .corpse-sw { background: #6e7681; }
+.river-sw { background: #1e5aa8; }

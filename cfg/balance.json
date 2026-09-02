@@ -1,6 +1,6 @@
 {
-  "rules_version": 10,
-  "world": { "width": 128, "height": 128, "seed": 20260901 },
+  "rules_version": 11,
+  "world": { "width": 128, "height": 128, "seed": 20260905 },
   "time": { "ticks_per_season": 100 },
   "grass": {
     "growth_base": 0.05,

@@ -165,22 +165,29 @@ function renderWorld(snap) {
   const data = img.data;
 
   // 逐像素填充：每个格子渲染成 cellW×cellH 的像素块
+  const river = snap.river || null;
   for (let gy = 0; gy < gh; gy++) {
     for (let gx = 0; gx < gw; gx++) {
       const idx = gy * gw + gx;
       const grass = snap.grass[idx] || 0;
       const nutrient = snap.nutrient[idx] || 0;
-      // 草量 0~100 映射到绿色亮度
-      const g = Math.min(1, grass / 100);
-      let r = 18 + g * 40;
-      let gg = 60 + g * 120;
-      let b = 20 + g * 30;
-      // 养分叠加棕色
-      const n = Math.min(1, nutrient / 100);
-      r += n * 40;
-      gg *= (1 - n * 0.3);
-      b *= (1 - n * 0.4);
-      r = Math.min(255, r); gg = Math.min(255, gg); b = Math.min(255, b);
+      // 河流格显示蓝色（河流与草互斥）
+      let r, gg, b;
+      if (river && river[idx]) {
+        r = 30; gg = 90; b = 180;
+      } else {
+        // 草量 0~100 映射到绿色亮度
+        const g = Math.min(1, grass / 100);
+        r = 18 + g * 40;
+        gg = 60 + g * 120;
+        b = 20 + g * 30;
+        // 养分叠加棕色
+        const n = Math.min(1, nutrient / 100);
+        r += n * 40;
+        gg *= (1 - n * 0.3);
+        b *= (1 - n * 0.4);
+        r = Math.min(255, r); gg = Math.min(255, gg); b = Math.min(255, b);
+      }
 
       // 填充该格子对应的所有像素
       const x0 = Math.round(gx * cellW);

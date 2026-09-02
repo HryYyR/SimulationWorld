@@ -21,13 +21,16 @@ func (s *GrowGrass) Step(w *world.World, c *core.Ctx) {
 
 	for y := 0; y < w.Grid.H; y++ {
 		for x := 0; x < w.Grid.W; x++ {
+			i := w.Grid.Idx(x, y)
+			if w.Grid.River[i] {
+				continue // 河流不长草
+			}
 			mult := 1.0
 			for _, m := range scoped {
 				if m.R <= 0 || chebyshev(x, y, m.X, m.Y) <= m.R {
 					mult *= m.Mult
 				}
 			}
-			i := w.Grid.Idx(x, y)
 			growth := (base + w.Grid.Nutrient[i]*coeff) * mult
 			if growth < 0 {
 				growth = 0
