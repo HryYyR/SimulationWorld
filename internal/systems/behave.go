@@ -456,7 +456,8 @@ func (s *Behave) hunt(w *world.World, c *core.Ctx, tiger, deer *world.Animal, r 
 	jump := tiger.Sp.Hunt.FleeJump
 	for i := 0; i < jump; i++ {
 		nx, ny := deer.X+dir[0], deer.Y+dir[1]
-		if !w.Grid.InBounds(nx, ny) {
+		// 逃窜不能穿过不可穿越地形（如河流），碰到即停
+		if !w.CanEnter(nx, ny, deer.Sp) {
 			break
 		}
 		deer.X, deer.Y = nx, ny
@@ -474,7 +475,8 @@ func (s *Behave) wander(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng
 
 func (s *Behave) move(w *world.World, c *core.Ctx, a *world.Animal, dx, dy int) bool {
 	nx, ny := a.X+dx, a.Y+dy
-	if !w.Grid.InBounds(nx, ny) {
+	// 越界或落在该物种不可穿越的地形上（如鹿不能过河）则原地不动
+	if !w.CanEnter(nx, ny, a.Sp) {
 		return false
 	}
 	cost := c.Params.At(a.Species+".move_cost", a.X, a.Y)

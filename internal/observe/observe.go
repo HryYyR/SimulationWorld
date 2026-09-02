@@ -243,13 +243,22 @@ type Snapshot struct {
 	Height       int              `json:"height"`
 	Grass        []float64        `json:"grass"`
 	Nutrient     []float64        `json:"nutrient"`
-	River        []bool           `json:"river,omitempty"`
+	Terrain      []int            `json:"terrain,omitempty"`
 	Animals      []AnimalView     `json:"animals"`
 	Corpses      []CorpseView     `json:"corpses"`
 	Weather      env.WeatherState `json:"weather"`
 	StateHash    uint64           `json:"state_hash"`
 	Events       []Event          `json:"events"`
 	Samples      []Sample         `json:"samples"`
+}
+
+// terrainToInts 把字节地形转成 int 切片，确保 JSON 序列化为 [0,1,...] 数组而非 base64 字符串。
+func terrainToInts(t []byte) []int {
+	out := make([]int, len(t))
+	for i, v := range t {
+		out[i] = int(v)
+	}
+	return out
 }
 
 func SnapshotFromWorld(w *world.World, cfg *config.Root, events []Event, samples []Sample) *Snapshot {
@@ -261,7 +270,7 @@ func SnapshotFromWorld(w *world.World, cfg *config.Root, events []Event, samples
 		Height:       w.Grid.H,
 		Grass:        append([]float64(nil), w.Grid.Grass...),
 		Nutrient:     append([]float64(nil), w.Grid.Nutrient...),
-		River:        append([]bool(nil), w.Grid.River...),
+		Terrain:      terrainToInts(w.Grid.Terrain),
 		Weather:      w.Weather,
 		StateHash:    StateHash(w),
 		Events:       append([]Event(nil), events...),
@@ -312,12 +321,8 @@ func StateHash(w *world.World) uint64 {
 	for _, v := range w.Grid.Nutrient {
 		putFloat(v)
 	}
-	for _, v := range w.Grid.River {
-		if v {
-			put(1)
-		} else {
-			put(0)
-		}
+	for _, v := range w.Grid.Terrain {
+		put(uint64(v))
 	}
 	animals := append([]*world.Animal(nil), w.Animals...)
 	sort.Slice(animals, func(i, j int) bool { return animals[i].ID < animals[j].ID })

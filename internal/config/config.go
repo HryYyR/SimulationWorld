@@ -32,6 +32,8 @@ type Balance struct {
 		GrowthCap                float64 `json:"growth_cap"`
 		NutrientConsumptionCoeff float64 `json:"nutrient_consumption_coeff"`
 		NutrientCap              float64 `json:"nutrient_cap"`
+		RiverBankGrowthMult      float64 `json:"river_bank_growth_mult"`
+		RiverBankGrowthRadius    int     `json:"river_bank_growth_radius"`
 	} `json:"grass"`
 	Init struct {
 		Grass         float64 `json:"grass"`
@@ -69,6 +71,7 @@ type Species struct {
 	KillRadius             int       `json:"kill_radius,omitempty"`
 	HuntCooldown           int       `json:"hunt_cooldown,omitempty"`
 	Corpse                 Corpse    `json:"corpse"`
+	BlockedTerrains        []string  `json:"blocked_terrains,omitempty"`
 }
 
 type Diet struct {
@@ -98,6 +101,18 @@ type Reproduce struct {
 type Corpse struct {
 	Ticks    int     `json:"ticks"`
 	Nutrient float64 `json:"nutrient"`
+}
+
+// BlockedSet 返回物种不可穿越的地形名集合（如 {"river": true}），供地形阻挡判断复用。
+func (s *Species) BlockedSet() map[string]bool {
+	if len(s.BlockedTerrains) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(s.BlockedTerrains))
+	for _, t := range s.BlockedTerrains {
+		m[t] = true
+	}
+	return m
 }
 
 type Weather struct {
@@ -222,6 +237,8 @@ func (r *Root) BaseSlots() map[string]float64 {
 		"grass.growth_cap":                 r.Balance.Grass.GrowthCap,
 		"grass.nutrient_consumption_coeff": r.Balance.Grass.NutrientConsumptionCoeff,
 		"grass.nutrient_cap":               r.Balance.Grass.NutrientCap,
+		"grass.river_bank_growth_mult":     r.Balance.Grass.RiverBankGrowthMult,
+		"grass.river_bank_growth_radius":   float64(r.Balance.Grass.RiverBankGrowthRadius),
 		"global.energy_cap":                r.Balance.EnergyCap,
 		"global.scavenge_rate":             r.Balance.Scavenge.Rate,
 		"global.scavenge_efficiency":       r.Balance.Scavenge.Efficiency,

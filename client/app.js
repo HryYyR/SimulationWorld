@@ -165,15 +165,15 @@ function renderWorld(snap) {
   const data = img.data;
 
   // 逐像素填充：每个格子渲染成 cellW×cellH 的像素块
-  const river = snap.river || null;
+  const terrain = snap.terrain || null;
   for (let gy = 0; gy < gh; gy++) {
     for (let gx = 0; gx < gw; gx++) {
       const idx = gy * gw + gx;
       const grass = snap.grass[idx] || 0;
       const nutrient = snap.nutrient[idx] || 0;
-      // 河流格显示蓝色（河流与草互斥）
+      // 河流格（terrain==1）显示蓝色（河流与草互斥）
       let r, gg, b;
-      if (river && river[idx]) {
+      if (terrain && terrain[idx] === 1) {
         r = 30; gg = 90; b = 180;
       } else {
         // 草量 0~100 映射到绿色亮度

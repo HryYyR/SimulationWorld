@@ -8,17 +8,57 @@ import (
 	"ecosim/internal/rng"
 )
 
+// 地形类型：用 byte 而非 bool，便于未来扩展湖泊、山地等。
+// 每个物种通过 Species.BlockedTerrains 声明自己不能穿越的地形。
+const (
+	TerrainLand  byte = 0 // 陆地（默认）
+	TerrainRiver byte = 1 // 河流
+)
+
 type Grid struct {
 	W, H     int
 	Grass    []float64
 	Nutrient []float64
-	River    []bool // 河流格（true=河），河流与草互斥，不长草
+	Terrain  []byte // 每格地形类型，见 Terrain* 常量
 }
 
 func (g *Grid) Idx(x, y int) int { return y*g.W + x }
 
 func (g *Grid) InBounds(x, y int) bool {
 	return x >= 0 && y >= 0 && x < g.W && y < g.H
+}
+
+// IsRiver 判断某格是否为河流。
+func (g *Grid) IsRiver(x, y int) bool {
+	return g.InBounds(x, y) && g.Terrain[g.Idx(x, y)] == TerrainRiver
+}
+
+// NearRiver 判断某格切比雪夫距离 r 内是否存在河流格（用于岸边植被加速）。
+func (g *Grid) NearRiver(x, y, r int) bool {
+	for dy := -r; dy <= r; dy++ {
+		for dx := -r; dx <= r; dx++ {
+			if g.IsRiver(x+dx, y+dy) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsBlocked 判断某格是否对给定物种不可进入（按物种声明的 blocked_terrains）。
+// blocked 传入物种的 BlockedTerrains 解析结果：包含 "river" 则河流阻挡该物种。
+func (g *Grid) IsBlocked(x, y int, blocked map[string]bool) bool {
+	if !g.InBounds(x, y) {
+		return true
+	}
+	if len(blocked) == 0 {
+		return false
+	}
+	switch g.Terrain[g.Idx(x, y)] {
+	case TerrainRiver:
+		return blocked["river"]
+	}
+	return false
 }
 
 type Animal struct {
@@ -82,7 +122,7 @@ func Gen(cfg *config.Root, seed uint64) *World {
 			H:        cfg.Balance.World.Height,
 			Grass:    make([]float64, cfg.Balance.World.Width*cfg.Balance.World.Height),
 			Nutrient: make([]float64, cfg.Balance.World.Width*cfg.Balance.World.Height),
-			River:    make([]bool, cfg.Balance.World.Width*cfg.Balance.World.Height),
+			Terrain:  make([]byte, cfg.Balance.World.Width*cfg.Balance.World.Height),
 		},
 		byID:   make(map[int]*Animal),
 		NextID: 1,
@@ -98,11 +138,12 @@ func Gen(cfg *config.Root, seed uint64) *World {
 	occupied := make(map[[2]int]bool)
 	spawn := func(species string, x, y int, energy float64) *Animal {
 		sp := cfg.Species[species]
-		// 在目标位置附近找一个空位
+		blocked := sp.BlockedSet()
+		// 在目标位置附近找一个空位（避开不可穿越地形，如鹿避开河流）
 		for dx := -2; dx <= 2; dx++ {
 			for dy := -2; dy <= 2; dy++ {
 				nx, ny := x+dx, y+dy
-				if nx < 0 || nx >= w.Grid.W || ny < 0 || ny >= w.Grid.H {
+				if w.Grid.IsBlocked(nx, ny, blocked) {
 					continue
 				}
 				if occupied[[2]int{nx, ny}] {
@@ -196,10 +237,10 @@ func genRiver(w *World, r *rng.Rng) {
 			return
 		}
 		i := w.Grid.Idx(x, y)
-		if w.Grid.River[i] {
+		if w.Grid.Terrain[i] == TerrainRiver {
 			return
 		}
-		w.Grid.River[i] = true
+		w.Grid.Terrain[i] = TerrainRiver
 		w.Grid.Grass[i] = 0
 		w.Grid.Nutrient[i] = 0
 	}
@@ -379,6 +420,11 @@ func genRiver(w *World, r *rng.Rng) {
 		branch = smooth(branch, 2)
 		fillPath(branch, 3, 1, 0) // 枝干：起点宽 3，末端收细到 1
 	}
+}
+
+// CanEnter 统一判断某物种能否进入某格：越界或落在该物种不可穿越的地形上则不可进入。
+func (w *World) CanEnter(x, y int, sp *config.Species) bool {
+	return !w.Grid.IsBlocked(x, y, sp.BlockedSet())
 }
 
 func (w *World) AddAnimal(species string, sp *config.Species, x, y int, energy float64, lifespan int) *Animal {

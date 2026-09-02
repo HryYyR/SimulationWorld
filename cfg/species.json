@@ -22,7 +22,8 @@
     "old_metabolism_mult": 1.2,
     "satiation_full": 0.95,
     "satiation_hungry": 0.5,
-    "corpse": { "ticks": 30, "nutrient": 30 }
+    "corpse": { "ticks": 30, "nutrient": 30 },
+    "blocked_terrains": ["river"]
   },
   "tiger": {
     "vision": 8,

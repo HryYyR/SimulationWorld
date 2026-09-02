@@ -18,11 +18,13 @@ func (s *GrowGrass) Step(w *world.World, c *core.Ctx) {
 	nutrientCap := c.Params.Get("grass.nutrient_cap")
 	consumption := c.Params.Get("grass.nutrient_consumption_coeff")
 	scoped := c.Params.ScopedFor("grass.growth_mult")
+	bankMult := c.Params.Get("grass.river_bank_growth_mult")
+	bankRadius := int(c.Params.Get("grass.river_bank_growth_radius"))
 
 	for y := 0; y < w.Grid.H; y++ {
 		for x := 0; x < w.Grid.W; x++ {
 			i := w.Grid.Idx(x, y)
-			if w.Grid.River[i] {
+			if w.Grid.IsRiver(x, y) {
 				continue // 河流不长草
 			}
 			mult := 1.0
@@ -30,6 +32,10 @@ func (s *GrowGrass) Step(w *world.World, c *core.Ctx) {
 				if m.R <= 0 || chebyshev(x, y, m.X, m.Y) <= m.R {
 					mult *= m.Mult
 				}
+			}
+			// 河流岸边：切比雪夫距离 bankRadius 内有河流则草加速（水边植被更茂盛）
+			if bankRadius > 0 && bankMult != 1.0 && w.Grid.NearRiver(x, y, bankRadius) {
+				mult *= bankMult
 			}
 			growth := (base + w.Grid.Nutrient[i]*coeff) * mult
 			if growth < 0 {

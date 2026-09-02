@@ -1,13 +1,15 @@
 {
-  "rules_version": 11,
-  "world": { "width": 128, "height": 128, "seed": 20260905 },
+  "rules_version": 12,
+  "world": { "width": 128, "height": 128, "seed": 20260901 },
   "time": { "ticks_per_season": 100 },
   "grass": {
     "growth_base": 0.05,
     "growth_nutrient_coeff": 0.001,
     "growth_cap": 100,
     "nutrient_consumption_coeff": 0.05,
-    "nutrient_cap": 100
+    "nutrient_cap": 100,
+    "river_bank_growth_mult": 2.0,
+    "river_bank_growth_radius": 1
   },
   "init": {
     "grass": 30,

@@ -31,10 +31,14 @@ func (s *ApplyCommands) apply(w *world.World, c *core.Ctx, cmd core.Command) {
 		if cmd.Spawn == nil {
 			return
 		}
-		if _, ok := c.Cfg.Species[cmd.Spawn.Species]; !ok || !w.Grid.InBounds(cmd.Spawn.X, cmd.Spawn.Y) {
+		if _, ok := c.Cfg.Species[cmd.Spawn.Species]; !ok {
 			return
 		}
 		sp := c.Cfg.Species[cmd.Spawn.Species]
+		// 手动刷怪同样遵守地形约束：不能落在该物种不可穿越的地形上
+		if !w.CanEnter(cmd.Spawn.X, cmd.Spawn.Y, &sp) {
+			return
+		}
 		energy := 60.0
 		if cmd.Spawn.Species == "tiger" {
 			energy = 80
