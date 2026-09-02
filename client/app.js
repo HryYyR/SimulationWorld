@@ -1,7 +1,9 @@
 'use strict';
 
 // ---------- 状态 ----------
-let snapshot = null;       // 当前世界快照
+let snapshot = null;       // 当前世界快照（插值终点）
+let prevSnapshot = null;   // 上一帧世界快照（插值起点）
+let animStart = 0;         // 本次插值动画的起始时间戳（ms）
 let history = [];          // 种群历史（从 samples 累积）
 let running = false;       // 是否在播放
 let rafId = null;          // requestAnimationFrame id
@@ -37,16 +39,16 @@ async function api(path, opts) {
 }
 
 async function fetchState() {
-  snapshot = await api('/api/state');
-  onSnapshot(snapshot);
+  const snap = await api('/api/state');
+  onSnapshot(snap);
 }
 
 async function doStep() {
   if (busy) return;
   busy = true;
   try {
-    snapshot = await api('/api/step', { method: 'POST' });
-    onSnapshot(snapshot);
+    const snap = await api('/api/step', { method: 'POST' });
+    onSnapshot(snap);
   } catch (e) {
     handleError(e);
   } finally {
@@ -58,8 +60,8 @@ async function doRun(n) {
   if (busy) return;
   busy = true;
   try {
-    snapshot = await api(`/api/run?n=${n}`, { method: 'POST' });
-    onSnapshot(snapshot);
+    const snap = await api(`/api/run?n=${n}`, { method: 'POST' });
+    onSnapshot(snap);
   } catch (e) {
     handleError(e);
   } finally {
@@ -71,9 +73,10 @@ async function doReset() {
   stop();
   busy = true;
   try {
-    snapshot = await api('/api/reset', { method: 'POST' });
+    const snap = await api('/api/reset', { method: 'POST' });
     history = [];
-    onSnapshot(snapshot);
+    prevSnapshot = null; // 重置：不保留旧世界坐标，避免跨世界插值
+    onSnapshot(snap);
     setStatus('已重置');
   } catch (e) {
     handleError(e);
@@ -85,7 +88,6 @@ async function doReset() {
 function handleError(e) {
   setStatus(e.message, true);
   if (e.snapshot) {
-    snapshot = e.snapshot;
     onSnapshot(e.snapshot);
   }
   stop();
@@ -106,11 +108,17 @@ function onSnapshot(snap) {
       history = history.slice(history.length - 2000);
     }
   }
+  // 平滑移动：旧快照成为插值起点，新快照成为终点，动画从此刻开始
+  prevSnapshot = snapshot;
+  snapshot = snap;
+  animStart = performance.now();
   renderStats(snap);
-  renderWorld(snap);
   renderChart();
   renderEvents(snap);
   setStatus('');
+  if (!running) {
+    renderWorld(snap, 1); // 未播放时直接画终态（无动画）
+  }
 }
 
 function renderStats(snap) {
@@ -154,42 +162,46 @@ function resizeWorldCanvas(gw, gh) {
   }
 }
 
-function renderWorld(snap) {
+// renderWorld(snap, t)：t 为 0~1 的插值因子，用于在 prevSnapshot→snapshot 间平滑移动动物/尸体。
+// t=1 时等价于直接画快照终态。每帧先彻底清屏，再完整重绘背景 + actors，杜绝拖影。
+function renderWorld(snap, t) {
   const gw = snap.width || GRID;    // 用后端返回的真实宽高
   const gh = snap.height || GRID;
   resizeWorldCanvas(gw, gh);
   const w = worldCanvas.width, h = worldCanvas.height;
   const cellW = w / gw;
   const cellH = h / gh;
+
+  // 彻底清屏（覆盖 putImageData 可能的 1px 舍入缝隙）
+  wctx.clearRect(0, 0, w, h);
+  drawTerrain(snap, gw, gh, w, h, cellW, cellH);
+  drawActors(snap, t === undefined ? 1 : t, cellW, cellH);
+}
+
+// 绘制地形背景（草/河流的像素块）
+function drawTerrain(snap, gw, gh, w, h, cellW, cellH) {
   const img = wctx.createImageData(w, h);
   const data = img.data;
-
-  // 逐像素填充：每个格子渲染成 cellW×cellH 的像素块
   const terrain = snap.terrain || null;
   for (let gy = 0; gy < gh; gy++) {
     for (let gx = 0; gx < gw; gx++) {
       const idx = gy * gw + gx;
       const grass = snap.grass[idx] || 0;
       const nutrient = snap.nutrient[idx] || 0;
-      // 河流格（terrain==1）显示蓝色（河流与草互斥）
       let r, gg, b;
       if (terrain && terrain[idx] === 1) {
         r = 30; gg = 90; b = 180;
       } else {
-        // 草量 0~100 映射到绿色亮度
         const g = Math.min(1, grass / 100);
         r = 18 + g * 40;
         gg = 60 + g * 120;
         b = 20 + g * 30;
-        // 养分叠加棕色
         const n = Math.min(1, nutrient / 100);
         r += n * 40;
         gg *= (1 - n * 0.3);
         b *= (1 - n * 0.4);
         r = Math.min(255, r); gg = Math.min(255, gg); b = Math.min(255, b);
       }
-
-      // 填充该格子对应的所有像素
       const x0 = Math.round(gx * cellW);
       const y0 = Math.round(gy * cellH);
       const x1 = Math.round((gx + 1) * cellW);
@@ -206,12 +218,31 @@ function renderWorld(snap) {
     }
   }
   wctx.putImageData(img, 0, 0);
+}
 
-  // 尸体（灰色小点）
+// 按 ID 建立 prev 动物坐标索引，用于插值
+function indexById(list) {
+  const m = new Map();
+  for (const a of list) {
+    m.set(a.id, a);
+  }
+  return m;
+}
+
+// 绘制尸体和动物（t 为插值因子，0=上一快照位置，1=当前快照位置）
+function drawActors(snap, t, cellW, cellH) {
+  // 尸体（灰色小点）：同样按 ID 插值
   if (snap.corpses != null) {
+    const prevC = prevSnapshot && prevSnapshot.corpses ? indexById(prevSnapshot.corpses) : null;
     for (const c of snap.corpses) {
-      const px = c.x * cellW + cellW / 2;
-      const py = c.y * cellH + cellH / 2;
+      let cx = c.x, cy = c.y;
+      if (prevC && prevC.has(c.id)) {
+        const p = prevC.get(c.id);
+        cx = p.x + (c.x - p.x) * t;
+        cy = p.y + (c.y - p.y) * t;
+      }
+      const px = cx * cellW + cellW / 2;
+      const py = cy * cellH + cellH / 2;
       wctx.fillStyle = '#8b949e';
       wctx.beginPath();
       wctx.arc(px, py, Math.max(2, cellW * 0.3), 0, Math.PI * 2);
@@ -220,15 +251,20 @@ function renderWorld(snap) {
   }
 
   // 动物（圆点，用高对比色 + 白描边区分鹿/虎）
+  const prevA = prevSnapshot ? indexById(prevSnapshot.animals) : null;
   for (const a of snap.animals) {
-    const px = a.x * cellW + cellW / 2;
-    const py = a.y * cellH + cellH / 2;
+    let ax = a.x, ay = a.y;
+    if (prevA && prevA.has(a.id)) {
+      const p = prevA.get(a.id);
+      ax = p.x + (a.x - p.x) * t;
+      ay = p.y + (a.y - p.y) * t;
+    }
+    const px = ax * cellW + cellW / 2;
+    const py = ay * cellH + cellH / 2;
     const mature = a.age >= a.mature_age;
     const radius = Math.max(2.5, cellW * (mature ? 0.45 : 0.32));
-    // 鹿用暖棕、虎用亮橙红，两者色相差明显
     const color = a.species === 'deer' ? (mature ? '#c98a4b' : '#e6c9a8')
       : (mature ? '#ff6b35' : '#ffb38a');
-    // 白描边增强辨识度
     wctx.fillStyle = '#ffffff';
     wctx.beginPath();
     wctx.arc(px, py, radius + 1, 0, Math.PI * 2);
@@ -320,20 +356,27 @@ function toggle() {
 
 function loop() {
   if (!running) return;
-  rafId = requestAnimationFrame(async () => {
+  rafId = requestAnimationFrame(() => {
     if (!running) return;
     const now = performance.now();
     const tps = parseInt(speedSel.value, 10) || 30;
     const interval = 1000 / tps; // 每个 tick 的目标间隔（毫秒）
-    if (nextAt === 0) nextAt = now + interval;
 
+    // 平滑移动：每帧都在 prev→current 之间插值重绘，绝不被网络请求阻塞
+    if (snapshot) {
+      const t = animStart > 0 ? Math.min(1, (now - animStart) / interval) : 1;
+      renderWorld(snapshot, t);
+    }
+
+    // tick 推进：到点就发起单步（fire-and-forget，不 await，避免阻塞动画帧）
+    if (nextAt === 0) nextAt = now + interval;
     if (now >= nextAt) {
       nextAt = now + interval;
       if (!busy) {
-        await doStep(); // 每次只推进 1 tick，节奏稳定、看得清
+        void doStep(); // 故意不 await：动画继续，快照到达后 onSnapshot 自动衔接
       }
     }
-    if (running) loop();
+    loop();
   });
 }
 
