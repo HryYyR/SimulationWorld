@@ -1,0 +1,58 @@
+{
+  "deer": {
+    "vision": 6,
+    "threat_radius": 4,
+    "avoid_radius": 1,
+    "move_cost": 0.5,
+    "metabolism": 1.2,
+    "diet": { "rate": 4, "efficiency": 0.7, "dung_nutrient": 1 },
+    "eat_threshold": 60,
+    "reproduce": {
+      "energy_threshold": 80,
+      "cooldown": 40,
+      "cost": 45,
+      "child_energy": 30,
+      "mature_age": 40,
+      "mating_mode": "asexual",
+      "nurse_ratio": 0.3
+    },
+    "lifespan": [200, 320],
+    "juvenile_metabolism_mult": 0.8,
+    "juvenile_energy_cap_mult": 0.8,
+    "old_metabolism_mult": 1.2,
+    "satiation_full": 0.95,
+    "satiation_hungry": 0.5,
+    "corpse": { "ticks": 30, "nutrient": 30 }
+  },
+  "tiger": {
+    "vision": 8,
+    "kill_radius": 2,
+    "hunt_cooldown": 8,
+    "move_cost": 0.8,
+    "metabolism": 2.2,
+    "hunt": {
+      "success": 0.35,
+      "gain": 55,
+      "fail_tiger_cost": 2,
+      "fail_deer_cost": 1,
+      "flee_jump": 2
+    },
+    "reproduce": {
+      "energy_threshold": 90,
+      "cooldown": 90,
+      "cost": 40,
+      "child_energy": 40,
+      "mature_age": 50,
+      "mating_mode": "asexual",
+      "nurse_ratio": 0.3
+    },
+    "lifespan": [320, 480],
+    "juvenile_metabolism_mult": 0.8,
+    "juvenile_energy_cap_mult": 0.8,
+    "old_metabolism_mult": 1.2,
+    "satiation_full": 0.95,
+    "satiation_hungry": 0.5,
+    "scavenge_freshness": 0.3,
+    "corpse": { "ticks": 40, "nutrient": 50 }
+  }
+}

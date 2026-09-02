@@ -1,0 +1,23 @@
+{
+  "rules_version": 10,
+  "world": { "width": 128, "height": 128, "seed": 20260901 },
+  "time": { "ticks_per_season": 100 },
+  "grass": {
+    "growth_base": 0.05,
+    "growth_nutrient_coeff": 0.001,
+    "growth_cap": 100,
+    "nutrient_consumption_coeff": 0.05,
+    "nutrient_cap": 100
+  },
+  "init": {
+    "grass": 30,
+    "nutrient": 40,
+    "noise": 10,
+    "deer_packs": 48,
+    "tiger_packs": 3,
+    "pack_adults": 2,
+    "pack_juveniles": 1
+  },
+  "energy_cap": 100,
+  "scavenge": { "rate": 40, "efficiency": 0.8 }
+}

@@ -1,0 +1,10 @@
+{
+  "tick": 1000,
+  "deer_pop": 1270,
+  "tiger_pop": 0,
+  "grass_total": 132719.2503328733,
+  "nutrient_avg": 81.7865619324131,
+  "state_hash": "d67c23f1ce4ac6fc",
+  "extinct": true,
+  "rules_version": 5
+}

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>生态模拟世界 · 可视化</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>🌍 生态模拟世界</h1>
+    <div class="stats">
+      <span class="stat"><label>tick</label><b id="tick">0</b></span>
+      <span class="stat"><label>季节</label><b id="season">-</b></span>
+      <span class="stat"><label>天气</label><b id="weather">-</b></span>
+      <span class="stat"><label>鹿</label><b id="deer" class="deer">0</b></span>
+      <span class="stat"><label>虎</label><b id="tiger" class="tiger">0</b></span>
+      <span class="stat"><label>尸体</label><b id="corpse">0</b></span>
+      <span class="stat"><label>草总量</label><b id="grass">0</b></span>
+      <span class="stat"><label>state_hash</label><b id="hash" class="mono">-</b></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="world-panel">
+      <div class="panel-title">世界网格</div>
+      <div class="world-canvas-wrap">
+        <canvas id="world" width="640" height="640"></canvas>
+      </div>
+      <div class="legend">
+        <span class="lg"><i class="sw deer-sw"></i>鹿</span>
+        <span class="lg"><i class="sw deerj-sw"></i>幼鹿</span>
+        <span class="lg"><i class="sw tiger-sw"></i>虎</span>
+        <span class="lg"><i class="sw tigerj-sw"></i>幼虎</span>
+        <span class="lg"><i class="sw corpse-sw"></i>尸体</span>
+        <span class="lg">草：绿深浅表示草量 · 养分：暗色叠加</span>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="control-panel">
+        <div class="panel-title">控制</div>
+        <div class="controls">
+          <button id="btn-play" class="primary">▶ 开始</button>
+          <button id="btn-step">单步</button>
+          <button id="btn-reset">重置</button>
+        </div>
+        <div class="speed-row">
+          <label>速度</label>
+          <select id="speed">
+            <option value="2">2 tick/秒</option>
+            <option value="5">5 tick/秒</option>
+            <option value="10">10 tick/秒</option>
+            <option value="30" selected>30 tick/秒</option>
+            <option value="60">60 tick/秒</option>
+            <option value="200">200 tick/秒</option>
+          </select>
+        </div>
+        <div class="hint" id="status">就绪</div>
+      </section>
+
+      <section class="chart-panel">
+        <div class="panel-title">种群曲线</div>
+        <canvas id="chart" width="420" height="220"></canvas>
+        <div class="legend">
+          <span class="lg"><i class="sw deer-sw"></i>鹿</span>
+          <span class="lg"><i class="sw tiger-sw"></i>虎</span>
+        </div>
+      </section>
+
+      <section class="events-panel">
+        <div class="panel-title">最近事件</div>
+        <ul id="events"></ul>
+      </section>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

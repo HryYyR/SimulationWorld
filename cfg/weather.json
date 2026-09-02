@@ -1,0 +1,56 @@
+{
+  "states": ["sunny", "rain", "drought", "storm"],
+  "duration": {
+    "sunny": [5, 15],
+    "rain": [3, 8],
+    "drought": [30, 80],
+    "storm": [2, 5]
+  },
+  "transitions": {
+    "spring": {
+      "sunny": [0.50, 0.35, 0.05, 0.10],
+      "rain": [0.55, 0.30, 0.05, 0.10],
+      "drought": [0.60, 0.30, 0.00, 0.10],
+      "storm": [0.60, 0.25, 0.05, 0.10]
+    },
+    "summer": {
+      "sunny": [0.55, 0.15, 0.25, 0.05],
+      "rain": [0.50, 0.20, 0.25, 0.05],
+      "drought": [0.40, 0.20, 0.35, 0.05],
+      "storm": [0.55, 0.20, 0.15, 0.10]
+    },
+    "autumn": {
+      "sunny": [0.55, 0.25, 0.10, 0.10],
+      "rain": [0.50, 0.30, 0.10, 0.10],
+      "drought": [0.55, 0.25, 0.10, 0.10],
+      "storm": [0.55, 0.25, 0.10, 0.10]
+    },
+    "winter": {
+      "sunny": [0.45, 0.15, 0.10, 0.30],
+      "rain": [0.45, 0.20, 0.10, 0.25],
+      "drought": [0.55, 0.15, 0.10, 0.20],
+      "storm": [0.45, 0.15, 0.10, 0.30]
+    }
+  },
+  "modifiers": {
+    "rain": [
+      { "key": "grass.growth_mult", "mult": 1.8 },
+      { "key": "tiger.hunt_success", "mult": 0.7 }
+    ],
+    "drought": [{ "key": "grass.growth_mult", "mult": 0.4 }],
+    "storm": [
+      { "key": "deer.move_cost", "mult": 1.5 },
+      { "key": "tiger.hunt_success", "mult": 0.6 }
+    ],
+    "sunny": []
+  },
+  "season_modifiers": {
+    "spring": [{ "key": "grass.growth_mult", "mult": 1.3 }],
+    "summer": [],
+    "autumn": [{ "key": "grass.growth_mult", "mult": 0.7 }],
+    "winter": [
+      { "key": "grass.growth_mult", "mult": 0.25 },
+      { "key": "deer.metabolism", "mult": 1.3 }
+    ]
+  }
+}
