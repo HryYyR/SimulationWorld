@@ -94,14 +94,23 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 	s.advance(n, w)
 }
 
-// handleReset 用当前配置重建世界。
+// handleReset 用指定种子重建世界。支持 ?seed=123 指定随机种子，缺省用 balance.json 的种子。
 func (s *server) handleReset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	seed := uint64(s.cfg.Balance.World.Seed)
+	if v := r.URL.Query().Get("seed"); v != "" {
+		parsed, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid seed", http.StatusBadRequest)
+			return
+		}
+		seed = parsed
+	}
 	s.mu.Lock()
-	s.eng = engine.New(s.cfg, engine.Options{Seed: uint64(s.cfg.Balance.World.Seed)})
+	s.eng = engine.New(s.cfg, engine.Options{Seed: seed})
 	snap := s.eng.Snapshot(200, 2000)
 	s.mu.Unlock()
 	// 注意：不能复用 handleState，它会校验 GET 方法，而这里是 POST

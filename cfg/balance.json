@@ -1,6 +1,6 @@
 {
-  "rules_version": 12,
-  "world": { "width": 128, "height": 128, "seed": 20260901 },
+  "rules_version": 19,
+  "world": { "width": 128, "height": 128, "seed": 20260902 },
   "time": { "ticks_per_season": 100 },
   "grass": {
     "growth_base": 0.05,
@@ -18,7 +18,8 @@
     "deer_packs": 48,
     "tiger_packs": 3,
     "pack_adults": 2,
-    "pack_juveniles": 1
+    "pack_juveniles": 1,
+    "crocodile_count": 10
   },
   "energy_cap": 100,
   "scavenge": { "rate": 40, "efficiency": 0.8 }

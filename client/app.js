@@ -69,11 +69,12 @@ async function doRun(n) {
   }
 }
 
-async function doReset() {
+async function doReset(seed) {
   stop();
   busy = true;
   try {
-    const snap = await api('/api/reset', { method: 'POST' });
+    const url = seed != null ? `/api/reset?seed=${encodeURIComponent(seed)}` : '/api/reset';
+    const snap = await api(url, { method: 'POST' });
     history = [];
     prevSnapshot = null; // 重置：不保留旧世界坐标，避免跨世界插值
     onSnapshot(snap);
@@ -100,7 +101,7 @@ function onSnapshot(snap) {
     // 只保留 tick 递增的部分，去重
     for (const s of snap.samples) {
       if (history.length === 0 || s.tick > history[history.length - 1].tick) {
-        history.push({ tick: s.tick, deer: s.deer_pop, tiger: s.tiger_pop });
+        history.push({ tick: s.tick, deer: s.deer_pop, tiger: s.tiger_pop, crocodile: s.crocodile_pop || 0 });
       }
     }
     // 限制历史长度
@@ -122,16 +123,19 @@ function onSnapshot(snap) {
 }
 
 function renderStats(snap) {
-  let deer = 0, tiger = 0;
+  let deer = 0, tiger = 0, crocodile = 0;
   for (const a of snap.animals) {
     if (a.species === 'deer') deer++;
     else if (a.species === 'tiger') tiger++;
+    else if (a.species === 'crocodile') crocodile++;
   }
   let grass = 0;
   for (const g of snap.grass) grass += g;
   $('tick').textContent = snap.tick;
+  $('seed').textContent = snap.seed;
   $('deer').textContent = deer;
   $('tiger').textContent = tiger;
+  $('crocodile').textContent = crocodile;
   $('corpse').textContent = snap.corpses == null ? 0 : snap.corpses.length;
   $('grass').textContent = Math.round(grass);
   $('hash').textContent = snap.state_hash.toString(16).padStart(16, '0');
@@ -229,6 +233,22 @@ function indexById(list) {
   return m;
 }
 
+// 预加载 SVG 图片
+const svgImages = {
+  deer: new Image(),
+  tiger: new Image(),
+  crocodile: new Image(),
+  egg: new Image(),
+  corpse: new Image()
+};
+
+// 设置 SVG 图片路径
+svgImages.deer.src = 'icon/鹿.svg';
+svgImages.tiger.src = 'icon/虎.svg';
+svgImages.crocodile.src = 'icon/鳄鱼.svg';
+svgImages.egg.src = 'icon/鳄鱼蛋.svg';
+svgImages.corpse.src = 'icon/尸体.svg';
+
 // 绘制尸体和动物（t 为插值因子，0=上一快照位置，1=当前快照位置）
 function drawActors(snap, t, cellW, cellH) {
   // 尸体（灰色小点）：同样按 ID 插值
@@ -243,14 +263,32 @@ function drawActors(snap, t, cellW, cellH) {
       }
       const px = cx * cellW + cellW / 2;
       const py = cy * cellH + cellH / 2;
-      wctx.fillStyle = '#8b949e';
-      wctx.beginPath();
-      wctx.arc(px, py, Math.max(2, cellW * 0.3), 0, Math.PI * 2);
-      wctx.fill();
+      
+      // 绘制尸体 SVG
+      wctx.save();
+      wctx.translate(px, py);
+      wctx.scale(cellW * 0.01, cellW * 0.01); // 调整 SVG 大小比例
+      wctx.drawImage(svgImages.corpse, -svgImages.corpse.width/2, -svgImages.corpse.height/2);
+      wctx.restore();
     }
   }
 
-  // 动物（圆点，用高对比色 + 白描边区分鹿/虎）
+  // 鳄鱼蛋（浅色小点）
+  if (snap.eggs != null) {
+    for (const e of snap.eggs) {
+      const px = e.x * cellW + cellW / 2;
+      const py = e.y * cellH + cellH / 2;
+      
+      // 绘制鳄鱼蛋 SVG
+      wctx.save();
+      wctx.translate(px, py);
+      wctx.scale(cellW * 0.01, cellW * 0.01); // 调整 SVG 大小比例
+      wctx.drawImage(svgImages.egg, -svgImages.egg.width/2, -svgImages.egg.height/2);
+      wctx.restore();
+    }
+  }
+
+  // 动物（SVG 图片，用高对比色区分鹿/虎）
   const prevA = prevSnapshot ? indexById(prevSnapshot.animals) : null;
   for (const a of snap.animals) {
     let ax = a.x, ay = a.y;
@@ -261,22 +299,35 @@ function drawActors(snap, t, cellW, cellH) {
     }
     const px = ax * cellW + cellW / 2;
     const py = ay * cellH + cellH / 2;
-    const mature = a.age >= a.mature_age;
-    const radius = Math.max(2.5, cellW * (mature ? 0.45 : 0.32));
-    const color = a.species === 'deer' ? (mature ? '#c98a4b' : '#e6c9a8')
-      : (mature ? '#ff6b35' : '#ffb38a');
-    wctx.fillStyle = '#ffffff';
-    wctx.beginPath();
-    wctx.arc(px, py, radius + 1, 0, Math.PI * 2);
-    wctx.fill();
-    wctx.fillStyle = color;
-    wctx.beginPath();
-    wctx.arc(px, py, radius, 0, Math.PI * 2);
-    wctx.fill();
+    
+    // 根据动物种类选择对应的 SVG
+    let image;
+    if (a.species === 'deer') {
+      image = svgImages.deer;
+    } else if (a.species === 'tiger') {
+      image = svgImages.tiger;
+    } else {
+      image = svgImages.crocodile;
+    }
+    
+    // 绘制动物 SVG
+    wctx.save();
+    wctx.translate(px, py);
+    wctx.scale(cellW * 0.01, cellW * 0.01); // 调整 SVG 大小比例
+    wctx.drawImage(image, -image.width/2, -image.height/2);
+    wctx.restore();
   }
 }
 
 // ---------- 种群曲线 ----------
+// 每个物种独立曲线，通过按钮切换当前显示物种
+const SPECIES = [
+  { key: 'deer', label: '鹿', color: '#00fce5' },
+  { key: 'tiger', label: '虎', color: '#ff4400' },
+  { key: 'crocodile', label: '鳄鱼', color: '#2e8b57' },
+];
+let activeSpecies = 'deer'; // 当前显示的物种曲线
+
 function renderChart() {
   const w = chartCanvas.width, h = chartCanvas.height;
   cctx.clearRect(0, 0, w, h);
@@ -291,7 +342,8 @@ function renderChart() {
 
   if (history.length < 2) return;
 
-  const maxVal = Math.max(10, ...history.map((p) => Math.max(p.deer, p.tiger)));
+  const sp = SPECIES.find((s) => s.key === activeSpecies) || SPECIES[0];
+  const maxVal = Math.max(10, ...history.map((p) => p[sp.key] || 0));
   const minTick = history[0].tick;
   const maxTick = history[history.length - 1].tick;
   const span = Math.max(1, maxTick - minTick);
@@ -299,8 +351,13 @@ function renderChart() {
   const mapX = (tick) => ((tick - minTick) / span) * w;
   const mapY = (v) => h - (v / maxVal) * (h - 8) - 4;
 
-  drawLine('deer', '#c98a4b', mapX, mapY);
-  drawLine('tiger', '#e06c45', mapX, mapY);
+  drawLine(sp.key, sp.color, mapX, mapY);
+
+  // 曲线标题（左上角显示当前物种 + 最新数量）
+  const latest = history[history.length - 1][sp.key] || 0;
+  cctx.fillStyle = sp.color;
+  cctx.font = '12px ui-monospace, monospace';
+  cctx.fillText(`${sp.label}：${latest}`, 6, 14);
 }
 
 function drawLine(key, color, mapX, mapY) {
@@ -310,7 +367,7 @@ function drawLine(key, color, mapX, mapY) {
   for (let i = 0; i < history.length; i++) {
     const p = history[i];
     const x = mapX(p.tick);
-    const y = mapY(p[key]);
+    const y = mapY(p[key] || 0);
     if (i === 0) cctx.moveTo(x, y);
     else cctx.lineTo(x, y);
   }
@@ -389,7 +446,17 @@ function setStatus(msg, isError) {
 // ---------- 绑定事件 ----------
 btnPlay.addEventListener('click', toggle);
 btnStep.addEventListener('click', doStep);
-btnReset.addEventListener('click', doReset);
+btnReset.addEventListener('click', () => doReset());
+
+// 种群曲线物种切换按钮
+document.querySelectorAll('.chart-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    activeSpecies = btn.dataset.species;
+    document.querySelectorAll('.chart-tab').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderChart();
+  });
+});
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
@@ -404,5 +471,47 @@ window.addEventListener('resize', () => {
   if (snapshot) renderWorld(snapshot);
 });
 
-// ---------- 启动 ----------
-fetchState().catch((e) => setStatus('无法连接服务器: ' + e.message, true));
+// ---------- 主界面：输入种子进入游戏 ----------
+const startScreen = $('start-screen');
+const seedInput = $('seed-input');
+const startHint = $('start-hint');
+const btnEnter = $('btn-enter');
+
+async function enterGame() {
+  let raw = seedInput.value.trim();
+  let seed = null;
+  if (raw !== '') {
+    if (!/^\d+$/.test(raw)) {
+      startHint.textContent = '种子必须是数字';
+      startHint.className = 'start-hint error';
+      return;
+    }
+    seed = raw;
+  }
+  startHint.textContent = '正在生成世界…';
+  startHint.className = 'start-hint';
+  try {
+    // 用指定种子（或默认种子）重建世界
+    if (seed != null) {
+      await doReset(seed);
+    } else {
+      const snap = await api('/api/state');
+      history = [];
+      prevSnapshot = null;
+      onSnapshot(snap);
+    }
+    startScreen.style.display = 'none';
+  } catch (e) {
+    startHint.textContent = '无法连接服务器: ' + e.message;
+    startHint.className = 'start-hint error';
+  }
+}
+
+btnEnter.addEventListener('click', enterGame);
+seedInput.addEventListener('keydown', (e) => {
+  if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+    enterGame();
+  }
+});
+// 初始聚焦到种子输入框
+seedInput.focus();

@@ -1,6 +1,6 @@
 {
-  "seed": 20260901,
-  "rules_version": 15,
+  "seed": 20260902,
+  "rules_version": 19,
   "ticks": 1000,
-  "state_hash": "bfe9124af55009bd"
+  "state_hash": "2e40f8145fb847e7"
 }

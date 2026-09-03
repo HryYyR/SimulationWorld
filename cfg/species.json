@@ -9,10 +9,11 @@
     "eat_threshold": 60,
     "reproduce": {
       "energy_threshold": 80,
-      "cooldown": 40,
+      "cooldown": 25,
       "cost": 45,
       "child_energy": 30,
       "mature_age": 40,
+      "max_breed_age": 160,
       "mating_mode": "asexual",
       "nurse_ratio": 0.3
     },
@@ -28,7 +29,7 @@
   "tiger": {
     "vision": 8,
     "kill_radius": 2,
-    "hunt_cooldown": 8,
+    "hunt_cooldown": 40,
     "move_cost": 0.8,
     "metabolism": 2.2,
     "hunt": {
@@ -40,10 +41,11 @@
     },
     "reproduce": {
       "energy_threshold": 90,
-      "cooldown": 90,
+      "cooldown": 155,
       "cost": 40,
       "child_energy": 40,
       "mature_age": 50,
+      "max_breed_age": 300,
       "mating_mode": "asexual",
       "nurse_ratio": 0.3
     },
@@ -55,5 +57,43 @@
     "satiation_hungry": 0.5,
     "scavenge_freshness": 0.3,
     "corpse": { "ticks": 40, "nutrient": 50 }
+  },
+  "crocodile": {
+    "vision": 6,
+    "kill_radius": 1,
+    "hunt_cooldown": 15,
+    "move_cost": 0.3,
+    "move_chance": 0.15,
+    "metabolism": 0.5,
+    "idle_metabolism_mult": 0.1,
+    "ambush_radius": 2,
+    "strike_range": 2,
+    "hunt": {
+      "success": 0.75,
+      "gain": 70,
+      "fail_tiger_cost": 3,
+      "fail_deer_cost": 2,
+      "flee_jump": 1
+    },
+    "reproduce": {
+      "energy_threshold": 999999,
+      "cooldown": 999999,
+      "cost": 30,
+      "child_energy": 72,
+      "mature_age": 80,
+      "max_breed_age": 350,
+      "mating_mode": "asexual",
+      "nurse_ratio": 0
+    },
+    "lifespan": [400, 600],
+    "juvenile_metabolism_mult": 0.8,
+    "juvenile_energy_cap_mult": 0.8,
+    "old_metabolism_mult": 1.2,
+    "satiation_full": 0.95,
+    "satiation_hungry": 0.3,
+    "scavenge_freshness": 0.5,
+    "corpse": { "ticks": 40, "nutrient": 40 },
+    "allowed_terrains": ["river"],
+    "egg": { "cooldown": 120, "hatch_min": 60, "hatch_max": 120 }
   }
 }

@@ -80,7 +80,7 @@ func (s *Behave) juvenileDeer(w *world.World, c *core.Ctx, a *world.Animal, r *r
 		s.forage(w, c, a, r)
 		return true
 	}
-	if s.followAdult(w, c, a, r) {
+	if s.followAdult(w, c, a) {
 		return true
 	}
 	return false
@@ -123,69 +123,81 @@ func (s *Behave) tiger(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng)
 }
 
 // crocodile 鳄鱼行为：平时只能在水里活动（白名单限制），行动迟缓、静止时代谢极低。
-// 幼崽只跟随成年体、不捕猎；成年鳄鱼：
-//   - 附近有幼崽时，无视条件捕猎附近鹿（供幼崽进食）
-//   - 不饱时捕猎/食腐（吃不完的尸体可多次食用）
-//   - 饱腹且产蛋冷却结束时，到最近陆地生蛋
-//   - 否则静止待机
+// 幼崽与成体逻辑：
+//   - 幼崽：饥饿时也捕猎（取消"幼崽不捕猎"），饱腹时跟随成年体（靠近后稳定不乱动）
+//   - 成体：范围内有鹿就捕猎（不依赖饥饿/饱食），吃满饱食度；饱腹产蛋；否则待机
+//   - 最高优先级：若已上岸（突袭残留），立即回水，杜绝滞留陆地
 func (s *Behave) crocodile(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) {
-	// 幼崽：只跟随，不捕猎
-	if a.Age < a.Sp.Reproduce.MatureAge {
-		if s.followAdult(w, c, a, r) {
-			return
-		}
+	// 优先级 0：已上岸则立即回水（修复上岸后卡在陆地不回水的 bug）
+	if !w.Grid.IsRiver(a.X, a.Y) {
+		s.returnToWater(w, c, a)
 		return
 	}
 
-	inWater := w.Grid.IsRiver(a.X, a.Y)
 	ambush := a.Sp.AmbushRadius
 	if ambush <= 0 {
 		ambush = 1
 	}
+	cap := energyCap(c, a)
+	// 吃满阈值：能量达到 cap*satiation_full 即视为"吃满"，停止捕猎；
+	// 只有掉回该阈值以下才重新捕猎，避免能量在满额附近反复捕猎、频繁上岸。
+	full := cap
+	if f := a.Sp.SatiationFull; f > 0 {
+		full = cap * f
+	}
+	needFood := a.Energy < full
 
-	// 附近有幼崽：无视饱食/冷却条件，主动捕猎附近鹿（供幼崽）
-	if s.hasYoungNearby(c, a) {
-		if prey := s.nearest(c, a, a.Sp.Vision, "deer"); prey != nil {
-			s.crocHunt(w, c, a, prey, r, inWater)
+	// 幼崽：跟随成年体为主，绝不主动巡游（刚出生乱跑反而危险）。
+	// 有成年体就跟随；找不到成年体时原地等待（由成年体后续寻回/供食），
+	// 仅在眼前就有鹿（伏击范围内）时才顺手捕猎，体现"幼崽也能捕猎"。
+	if a.Age < a.Sp.Reproduce.MatureAge {
+		if s.followAdult(w, c, a) {
+			return
+		}
+		// 无成年体可跟随：若眼前就有易捕的鹿则顺手捕，否则原地等待不乱窜
+		if prey := s.nearest(c, a, ambush, "deer"); prey != nil {
+			if a.HuntCool <= 0 {
+				s.hunt(w, c, a, prey, r)
+			}
+		}
+		return
+	}
+
+	// 范围内有鹿（易捕）且未吃满：捕猎（即使不饿也吃满饱食度）
+	if prey := s.nearest(c, a, ambush, "deer"); prey != nil {
+		if needFood && a.HuntCool <= 0 {
+			s.hunt(w, c, a, prey, r)
+		}
+		return
+	}
+	// 视野内有近岸鹿（冲刺范围内）：上岸扑击
+	if prey := s.nearest(c, a, a.Sp.Vision, "deer"); prey != nil {
+		strike := a.Sp.StrikeRange
+		if strike <= 0 {
+			strike = 1
+		}
+		if needFood && chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush+strike {
+			s.crocStrike(w, c, a, prey, r)
+			return
+		}
+		// 未吃满则沿河靠近猎物
+		if needFood {
+			s.approachInWater(w, c, a, prey)
 			return
 		}
 	}
 
-	// 不饱：捕猎（伏击/突袭）或食腐
-	if !a.Satiated {
-		if prey := s.nearest(c, a, ambush, "deer"); prey != nil {
-			s.crocHunt(w, c, a, prey, r, inWater)
-			return
-		}
-		// 附近有新鲜尸体则食腐（鳄鱼可多次食用吃不完的尸体）
+	// 未吃满：无近岸猎物则食腐或沿河巡游
+	if needFood {
 		if corpse := s.nearestCorpse(w, c, a, a.Sp.Vision); corpse != nil {
 			s.scavenge(w, c, a)
 			return
 		}
-		// 视野内有鹿：近岸扑击/沿河靠近
-		if prey := s.nearest(c, a, a.Sp.Vision, "deer"); prey != nil {
-			strike := a.Sp.StrikeRange
-			if strike <= 0 {
-				strike = 1
-			}
-			if chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush+strike {
-				s.crocStrike(w, c, a, prey, r)
-			} else {
-				s.approachInWater(w, c, a, prey)
-			}
-			return
-		}
-		// 饥饿但无猎物：沿河巡游
 		s.crocPatrol(w, c, a, r)
 		return
 	}
 
-	// 饱腹：若在岸上（突袭残留）回水，否则尝试产蛋或待机
-	if !inWater {
-		s.returnToWater(w, c, a)
-		return
-	}
-	// 饱腹且产蛋冷却结束 → 到最近陆地生蛋
+	// 已吃满：成体饱腹，尝试产蛋或待机
 	if a.EggCool <= 0 && a.Sp.Egg.Cooldown > 0 {
 		if s.layEgg(w, c, a, r) {
 			return
@@ -194,45 +206,13 @@ func (s *Behave) crocodile(w *world.World, c *core.Ctx, a *world.Animal, r *rng.
 	s.crocIdle(w, c, a, r)
 }
 
-// crocHunt 鳄鱼捕猎统一入口：伏击范围内直接捕杀；否则按冲刺范围决定扑击或沿河靠近。
-func (s *Behave) crocHunt(w *world.World, c *core.Ctx, a *world.Animal, prey *world.Animal, r *rng.Rng, inWater bool) {
-	ambush := a.Sp.AmbushRadius
-	if ambush <= 0 {
-		ambush = 1
-	}
-	if chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush {
-		if a.HuntCool <= 0 {
-			s.hunt(w, c, a, prey, r)
-		}
-		if !inWater {
-			s.returnToWater(w, c, a)
-		}
-		return
-	}
-	strike := a.Sp.StrikeRange
-	if strike <= 0 {
-		strike = 1
-	}
-	if chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush+strike {
-		s.crocStrike(w, c, a, prey, r)
-	} else {
-		s.approachInWater(w, c, a, prey)
-	}
-}
-
-// hasYoungNearby 判断附近（视野内）是否有同物种幼崽。
-func (s *Behave) hasYoungNearby(c *core.Ctx, a *world.Animal) bool {
-	for _, o := range c.Index.AnimalsInRadius(a.X, a.Y, a.Sp.Vision, a.Species) {
-		if !o.Dead && o.ID != a.ID && o.Age < a.Sp.Reproduce.MatureAge {
-			return true
-		}
-	}
-	return false
-}
-
 // layEgg 饱腹鳄鱼到最近陆地格产一颗蛋，返回是否成功。
 // 优先选择"紧邻河流"的岸边陆地格，保证孵化出的幼崽能立即进入附近水域。
 func (s *Behave) layEgg(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) bool {
+	// 繁殖需处于青壮年：超过繁殖年龄上限则不再产蛋
+	if a.Sp.Reproduce.MaxBreedAge > 0 && a.Age > a.Sp.Reproduce.MaxBreedAge {
+		return false
+	}
 	// 第一轮：找紧邻河流的岸边陆地格（周围 8 邻域有水）
 	x, y := -1, -1
 	best := 1 << 30
@@ -311,7 +291,8 @@ func (s *Behave) approachInWater(w *world.World, c *core.Ctx, a *world.Animal, p
 }
 
 // crocStrike 鳄鱼上岸突袭：从水中朝猎物方向冲刺（最多 strike_range 格，允许跨上陆地扑击），
-// 冲刺后若已进入 kill_radius 立即捕杀；否则下一 tick 由主逻辑拉回水中。
+// 冲刺后若已进入 kill_radius 立即捕杀；无论是否得手，本 tick 内随即回到最近水格，
+// 保证"冲上岸→咬→回水"一气呵成，绝不滞留陆地。
 // 仅在水中发起——避免在岸上持续追击深入陆地。
 func (s *Behave) crocStrike(w *world.World, c *core.Ctx, a *world.Animal, prey *world.Animal, r *rng.Rng) {
 	if !w.Grid.IsRiver(a.X, a.Y) {
@@ -349,20 +330,36 @@ func (s *Behave) crocStrike(w *world.World, c *core.Ctx, a *world.Animal, prey *
 	if chebyshev(a.X, a.Y, prey.X, prey.Y) <= killR && a.HuntCool <= 0 {
 		s.hunt(w, c, a, prey, r)
 	}
+	// 本 tick 内立即回水，杜绝滞留陆地（bug 修复）
+	if !w.Grid.IsRiver(a.X, a.Y) {
+		s.returnToWater(w, c, a)
+	}
 }
 
 // returnToWater 鳄鱼从岸上回到最近的水格（切比雪夫距离最近的河流格），恢复水域伏击姿态。
+// 搜索范围逐步扩大到 strike_range+1，确保深入陆地突袭后仍能找到回家的水格（修复卡岸 bug）。
 func (s *Behave) returnToWater(w *world.World, c *core.Ctx, a *world.Animal) {
+	maxR := a.Sp.StrikeRange + 1
+	if maxR < 2 {
+		maxR = 2
+	}
 	bestX, bestY := -1, -1
 	bestDist := 1 << 30
-	for _, d := range directions {
-		nx, ny := a.X+d[0], a.Y+d[1]
-		if !w.Grid.IsRiver(nx, ny) {
-			continue
+	for r := 1; r <= maxR; r++ {
+		for dy := -r; dy <= r; dy++ {
+			for dx := -r; dx <= r; dx++ {
+				nx, ny := a.X+dx, a.Y+dy
+				if !w.Grid.IsRiver(nx, ny) {
+					continue
+				}
+				dd := chebyshev(nx, ny, a.X, a.Y)
+				if dd < bestDist {
+					bestDist, bestX, bestY = dd, nx, ny
+				}
+			}
 		}
-		dd := chebyshev(nx, ny, a.X, a.Y)
-		if dd < bestDist {
-			bestDist, bestX, bestY = dd, nx, ny
+		if bestX >= 0 {
+			break // 已找到最近水格
 		}
 	}
 	if bestX < 0 {
@@ -424,7 +421,7 @@ func (s *Behave) juvenileTiger(w *world.World, c *core.Ctx, a *world.Animal, r *
 		s.huntNearest(w, c, a, r)
 		return true
 	}
-	return s.followAdult(w, c, a, r)
+	return s.followAdult(w, c, a)
 }
 
 // provideForYoung 饱腹成年虎：附近有幼崽且无新鲜尸体时，捕猎供幼崽食用。
@@ -523,10 +520,11 @@ func (s *Behave) occupiedByOther(c *core.Ctx, x, y, selfID int) bool {
 }
 
 // followAdult 幼崽跟随视野内最近的成年同类：每 tick 朝其移动 1 格，目标是停在
-// 距离成年体 1~2 格的空格上（期望距离每 tick 在 1~2 间随机，表现为松散跟随而非紧贴）。
-// 选格规则：优先未被其他动物占用、且不与成年体重叠，按"贴近期望距离"评分取最优；
+// 距离成年体 1~2 格的空格上（松散跟随）。一旦进入 1~2 格范围且当前格未被挤占，
+// 即视为"已到达"，原地不动——避免每 tick 随机期望距离导致幼崽在 1~2 格间来回震荡。
+// 选格规则：优先未被其他动物占用、且不与成年体重叠，按"贴近 1~2 格范围"评分取最优；
 // 若周围格子都被占满（格子不够），则原地不动、容忍重叠。
-func (s *Behave) followAdult(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) bool {
+func (s *Behave) followAdult(w *world.World, c *core.Ctx, a *world.Animal) bool {
 	vision := a.Sp.Vision
 	mature := a.Sp.Reproduce.MatureAge
 	adult := s.nearestAdult(c, a, vision, mature)
@@ -534,14 +532,12 @@ func (s *Behave) followAdult(w *world.World, c *core.Ctx, a *world.Animal, r *rn
 		return false // 视野内无成年同类，原地不动
 	}
 	dist := chebyshev(a.X, a.Y, adult.X, adult.Y)
-	// 期望跟随距离：1~2 格随机，让跟随位有随机性
-	want := 1 + r.Intn(2)
-	// 已在期望距离且当前格没被其他动物挤占，就保持不动（松散跟随）
-	if dist == want && !s.occupiedByOther(c, a.X, a.Y, a.ID) {
+	// 已进入跟随范围（1~2 格）且当前格没被其他动物挤占，就保持不动（已到达）
+	if dist >= 1 && dist <= 2 && !s.occupiedByOther(c, a.X, a.Y, a.ID) {
 		return false
 	}
 	// 朝成年体移动 1 格：在 8 方向中挑一个"可进入 + 未被占用 + 不与成年体重叠"的格子，
-	// 评分 = |实际距离-期望距离|*10 + 实际距离，越小越优（先贴合期望距离，再尽量靠近）
+	// 评分 = 目标格到成年体的距离，越小越优（朝 1~2 格跟随范围靠近）
 	bestX, bestY := -1, -1
 	bestScore := 1 << 30
 	// 退让候选：当前已与成年体同格时，若周围无完全空闲格，则允许落到"被其他幼崽占用
@@ -557,11 +553,11 @@ func (s *Behave) followAdult(w *world.World, c *core.Ctx, a *world.Animal, r *rn
 		if nd == 0 {
 			continue // 不与成年体站在同一格
 		}
-		diff := nd - want
-		if diff < 0 {
-			diff = -diff
+		// 评分：优先落在 1~2 格范围内（范围内记 0 代价），范围外按距离惩罚
+		score := nd
+		if nd >= 1 && nd <= 2 {
+			score = 0
 		}
-		score := diff*10 + nd
 		if s.occupiedByOther(c, nx, ny, a.ID) {
 			// 被占用：仅当当前与成年体同格时作为退让候选
 			if dist == 0 && score < fallbackScore {
@@ -760,7 +756,11 @@ func (s *Behave) tryReproduce(w *world.World, c *core.Ctx, a *world.Animal) bool
 	sp := a.Sp
 	threshold := sp.Reproduce.EnergyThreshold
 	mature := sp.Reproduce.MatureAge
+	// 繁殖需处于青壮年：达到成熟年龄、且未超过繁殖年龄上限（max_breed_age>0 时）
 	if a.Energy < threshold || a.Cooldown != 0 || a.Age < mature {
+		return false
+	}
+	if sp.Reproduce.MaxBreedAge > 0 && a.Age > sp.Reproduce.MaxBreedAge {
 		return false
 	}
 	cost := sp.Reproduce.Cost

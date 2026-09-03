@@ -108,6 +108,7 @@ type Reproduce struct {
 	Cost            float64 `json:"cost"`
 	ChildEnergy     float64 `json:"child_energy"`
 	MatureAge       int     `json:"mature_age"`
+	MaxBreedAge     int     `json:"max_breed_age,omitempty"` // 繁殖年龄上限（青壮年才可繁殖），0 表示不限
 	MatingMode      string  `json:"mating_mode"`
 	NurseRatio      float64 `json:"nurse_ratio,omitempty"`
 }
@@ -214,6 +215,9 @@ func (r *Root) Validate() error {
 		}
 		if sp.Reproduce.MatureAge <= 0 || sp.Reproduce.Cooldown < 0 {
 			return fmt.Errorf("species %s has invalid reproduce values", name)
+		}
+		if sp.Reproduce.MaxBreedAge > 0 && sp.Reproduce.MaxBreedAge <= sp.Reproduce.MatureAge {
+			return fmt.Errorf("species %s has max_breed_age <= mature_age", name)
 		}
 		if sp.Corpse.Ticks <= 0 || sp.Corpse.Nutrient < 0 {
 			return fmt.Errorf("species %s has invalid corpse values", name)
