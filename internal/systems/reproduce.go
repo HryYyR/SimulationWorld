@@ -24,5 +24,8 @@ func (s *Reproduce) Step(w *world.World, c *core.Ctx) {
 		if a.HuntCool > 0 {
 			a.HuntCool--
 		}
+		if a.EggCool > 0 {
+			a.EggCool--
+		}
 	}
 }

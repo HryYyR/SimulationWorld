@@ -27,6 +27,12 @@ func (s *Metabolism) Step(w *world.World, c *core.Ctx) {
 		// 代谢值可能被天气/季节动态修饰（如 winter 增加 deer 代谢），需查表
 		base := c.Params.Get(a.Species + ".metabolism")
 		amount := base * mult
+		// 静止代谢：本 tick 未移动则按 idle_metabolism_mult 打折（如鳄鱼伏击时几乎不耗能）
+		if !a.Moved {
+			if idle := c.Params.Get(a.Species + ".idle_metabolism_mult"); idle > 0 {
+				amount *= idle
+			}
+		}
 		a.Energy -= amount
 		c.Ledger.Add(a.Species+".metabolism", -amount)
 

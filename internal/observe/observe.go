@@ -120,6 +120,7 @@ type Sample struct {
 	Tick           int     `json:"tick"`
 	DeerPop        int     `json:"deer_pop"`
 	TigerPop       int     `json:"tiger_pop"`
+	CrocodilePop   int     `json:"crocodile_pop"`
 	GrassTotal     float64 `json:"grass_total"`
 	NutrientAvg    float64 `json:"nutrient_avg"`
 	Births         int     `json:"births"`
@@ -171,6 +172,8 @@ func (m *Metrics) Take(w *world.World) Sample {
 			s.DeerPop++
 		case "tiger":
 			s.TigerPop++
+		case "crocodile":
+			s.CrocodilePop++
 		}
 	}
 	for _, g := range w.Grid.Grass {
@@ -235,6 +238,14 @@ type CorpseView struct {
 	TicksLeft int     `json:"ticks_left"`
 }
 
+type EggView struct {
+	ID        int    `json:"id"`
+	Species   string `json:"species"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	TicksLeft int    `json:"ticks_left"`
+}
+
 type Snapshot struct {
 	RulesVersion int              `json:"rules_version"`
 	Tick         int              `json:"tick"`
@@ -246,6 +257,7 @@ type Snapshot struct {
 	Terrain      []int            `json:"terrain,omitempty"`
 	Animals      []AnimalView     `json:"animals"`
 	Corpses      []CorpseView     `json:"corpses"`
+	Eggs         []EggView        `json:"eggs"`
 	Weather      env.WeatherState `json:"weather"`
 	StateHash    uint64           `json:"state_hash"`
 	Events       []Event          `json:"events"`
@@ -279,6 +291,7 @@ func SnapshotFromWorld(w *world.World, cfg *config.Root, events []Event, samples
 	// 初始化为空切片（而非 nil），保证 JSON 序列化为 [] 而非 null，避免前端判空错误
 	s.Animals = []AnimalView{}
 	s.Corpses = []CorpseView{}
+	s.Eggs = []EggView{}
 	s.Events = append([]Event{}, events...)
 	s.Samples = append([]Sample{}, samples...)
 
@@ -293,6 +306,11 @@ func SnapshotFromWorld(w *world.World, cfg *config.Root, events []Event, samples
 		s.Corpses = append(s.Corpses, CorpseView{
 			ID: c.ID, Species: c.Species, X: c.X, Y: c.Y,
 			Remaining: c.Remaining, Total: c.Total, TicksLeft: c.TicksLeft,
+		})
+	}
+	for _, e := range w.Eggs {
+		s.Eggs = append(s.Eggs, EggView{
+			ID: e.ID, Species: e.Species, X: e.X, Y: e.Y, TicksLeft: e.TicksLeft,
 		})
 	}
 	return s
@@ -354,6 +372,17 @@ func StateHash(w *world.World) uint64 {
 		putFloat(c.Remaining)
 		put(uint64(c.TotalTicks))
 		put(uint64(c.TicksLeft))
+	}
+	eggs := append([]*world.Egg(nil), w.Eggs...)
+	sort.Slice(eggs, func(i, j int) bool { return eggs[i].ID < eggs[j].ID })
+	put(uint64(len(eggs)))
+	for _, e := range eggs {
+		put(uint64(e.ID))
+		putString(e.Species)
+		put(uint64(e.X))
+		put(uint64(e.Y))
+		put(uint64(e.TotalTicks))
+		put(uint64(e.TicksLeft))
 	}
 	putString(w.Weather.Current)
 	put(uint64(w.Weather.Left))

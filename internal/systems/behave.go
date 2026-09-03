@@ -29,11 +29,14 @@ func (s *Behave) Step(w *world.World, c *core.Ctx) {
 		if a.Dead {
 			continue
 		}
+		a.Moved = false // 每 tick 重置，供静止代谢判定
 		r := rng.New(w.Seed, rng.StreamBehavior, w.Tick, a.ID)
 		if a.Species == "deer" {
 			s.deer(w, c, a, r)
 		} else if a.Species == "tiger" {
 			s.tiger(w, c, a, r)
+		} else if a.Species == "crocodile" {
+			s.crocodile(w, c, a, r)
 		}
 	}
 }
@@ -117,6 +120,299 @@ func (s *Behave) tiger(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng)
 		}
 	}
 	s.wander(w, c, a, r)
+}
+
+// crocodile 鳄鱼行为：平时只能在水里活动（白名单限制），行动迟缓、静止时代谢极低。
+// 幼崽只跟随成年体、不捕猎；成年鳄鱼：
+//   - 附近有幼崽时，无视条件捕猎附近鹿（供幼崽进食）
+//   - 不饱时捕猎/食腐（吃不完的尸体可多次食用）
+//   - 饱腹且产蛋冷却结束时，到最近陆地生蛋
+//   - 否则静止待机
+func (s *Behave) crocodile(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) {
+	// 幼崽：只跟随，不捕猎
+	if a.Age < a.Sp.Reproduce.MatureAge {
+		if s.followAdult(w, c, a, r) {
+			return
+		}
+		return
+	}
+
+	inWater := w.Grid.IsRiver(a.X, a.Y)
+	ambush := a.Sp.AmbushRadius
+	if ambush <= 0 {
+		ambush = 1
+	}
+
+	// 附近有幼崽：无视饱食/冷却条件，主动捕猎附近鹿（供幼崽）
+	if s.hasYoungNearby(c, a) {
+		if prey := s.nearest(c, a, a.Sp.Vision, "deer"); prey != nil {
+			s.crocHunt(w, c, a, prey, r, inWater)
+			return
+		}
+	}
+
+	// 不饱：捕猎（伏击/突袭）或食腐
+	if !a.Satiated {
+		if prey := s.nearest(c, a, ambush, "deer"); prey != nil {
+			s.crocHunt(w, c, a, prey, r, inWater)
+			return
+		}
+		// 附近有新鲜尸体则食腐（鳄鱼可多次食用吃不完的尸体）
+		if corpse := s.nearestCorpse(w, c, a, a.Sp.Vision); corpse != nil {
+			s.scavenge(w, c, a)
+			return
+		}
+		// 视野内有鹿：近岸扑击/沿河靠近
+		if prey := s.nearest(c, a, a.Sp.Vision, "deer"); prey != nil {
+			strike := a.Sp.StrikeRange
+			if strike <= 0 {
+				strike = 1
+			}
+			if chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush+strike {
+				s.crocStrike(w, c, a, prey, r)
+			} else {
+				s.approachInWater(w, c, a, prey)
+			}
+			return
+		}
+		// 饥饿但无猎物：沿河巡游
+		s.crocPatrol(w, c, a, r)
+		return
+	}
+
+	// 饱腹：若在岸上（突袭残留）回水，否则尝试产蛋或待机
+	if !inWater {
+		s.returnToWater(w, c, a)
+		return
+	}
+	// 饱腹且产蛋冷却结束 → 到最近陆地生蛋
+	if a.EggCool <= 0 && a.Sp.Egg.Cooldown > 0 {
+		if s.layEgg(w, c, a, r) {
+			return
+		}
+	}
+	s.crocIdle(w, c, a, r)
+}
+
+// crocHunt 鳄鱼捕猎统一入口：伏击范围内直接捕杀；否则按冲刺范围决定扑击或沿河靠近。
+func (s *Behave) crocHunt(w *world.World, c *core.Ctx, a *world.Animal, prey *world.Animal, r *rng.Rng, inWater bool) {
+	ambush := a.Sp.AmbushRadius
+	if ambush <= 0 {
+		ambush = 1
+	}
+	if chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush {
+		if a.HuntCool <= 0 {
+			s.hunt(w, c, a, prey, r)
+		}
+		if !inWater {
+			s.returnToWater(w, c, a)
+		}
+		return
+	}
+	strike := a.Sp.StrikeRange
+	if strike <= 0 {
+		strike = 1
+	}
+	if chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush+strike {
+		s.crocStrike(w, c, a, prey, r)
+	} else {
+		s.approachInWater(w, c, a, prey)
+	}
+}
+
+// hasYoungNearby 判断附近（视野内）是否有同物种幼崽。
+func (s *Behave) hasYoungNearby(c *core.Ctx, a *world.Animal) bool {
+	for _, o := range c.Index.AnimalsInRadius(a.X, a.Y, a.Sp.Vision, a.Species) {
+		if !o.Dead && o.ID != a.ID && o.Age < a.Sp.Reproduce.MatureAge {
+			return true
+		}
+	}
+	return false
+}
+
+// layEgg 饱腹鳄鱼到最近陆地格产一颗蛋，返回是否成功。
+// 优先选择"紧邻河流"的岸边陆地格，保证孵化出的幼崽能立即进入附近水域。
+func (s *Behave) layEgg(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) bool {
+	// 第一轮：找紧邻河流的岸边陆地格（周围 8 邻域有水）
+	x, y := -1, -1
+	best := 1 << 30
+	pick := func(bank bool) {
+		for dy := -a.Sp.Vision; dy <= a.Sp.Vision; dy++ {
+			for dx := -a.Sp.Vision; dx <= a.Sp.Vision; dx++ {
+				nx, ny := a.X+dx, a.Y+dy
+				if !w.Grid.InBounds(nx, ny) || w.Grid.IsRiver(nx, ny) {
+					continue
+				}
+				if s.occupiedByOther(c, nx, ny, a.ID) {
+					continue
+				}
+				// bank=true 时只选紧邻河岸的陆地
+				if bank && !w.Grid.NearRiver(nx, ny, 1) {
+					continue
+				}
+				dd := chebyshev(nx, ny, a.X, a.Y)
+				if dd < best {
+					best, x, y = dd, nx, ny
+				}
+			}
+		}
+	}
+	pick(true)
+	if x < 0 {
+		// 无岸边空位则退而选任意陆地空位
+		best = 1 << 30
+		pick(false)
+	}
+	if x < 0 {
+		return false // 附近无可用陆地
+	}
+	// 孵化时间在 [hatch_min, hatch_max] 间波动
+	hatch := a.Sp.Egg.HatchMin
+	if a.Sp.Egg.HatchMax > a.Sp.Egg.HatchMin {
+		hatch += r.Intn(a.Sp.Egg.HatchMax - a.Sp.Egg.HatchMin + 1)
+	}
+	// 产蛋消耗：母体把 child_energy 转移进蛋（能量守恒：动物域 → 蛋域）
+	eggEnergy := a.Sp.Reproduce.ChildEnergy
+	if eggEnergy <= 0 {
+		eggEnergy = 20
+	}
+	cost := a.Sp.Reproduce.Cost
+	if cost > a.Energy {
+		return false // 能量不足，无法产蛋
+	}
+	a.Energy -= cost
+	c.Ledger.Add(a.Species+".egg", -cost)
+	w.AddEgg(a.Species, x, y, hatch, eggEnergy)
+	a.EggCool = a.Sp.Egg.Cooldown
+	c.Ev.Emit(w.Tick, "lay_egg", a.ID, 0, 0)
+	return true
+}
+
+// approachInWater 鳄鱼沿河道向猎物靠近 1 格：只在自身可进入的水格中选，
+// 挑切比雪夫距离最小的格子，全程不离开水域。
+func (s *Behave) approachInWater(w *world.World, c *core.Ctx, a *world.Animal, prey *world.Animal) {
+	cur := chebyshev(a.X, a.Y, prey.X, prey.Y)
+	bestX, bestY := -1, -1
+	bestDist := cur
+	for _, d := range directions {
+		nx, ny := a.X+d[0], a.Y+d[1]
+		if !w.CanEnter(nx, ny, a.Sp) {
+			continue // 不能离开水域
+		}
+		nd := chebyshev(nx, ny, prey.X, prey.Y)
+		if nd < bestDist {
+			bestDist, bestX, bestY = nd, nx, ny
+		}
+	}
+	if bestX < 0 {
+		return // 无更靠近的水格（如被河道走向限制），原地待机
+	}
+	s.move(w, c, a, bestX-a.X, bestY-a.Y)
+}
+
+// crocStrike 鳄鱼上岸突袭：从水中朝猎物方向冲刺（最多 strike_range 格，允许跨上陆地扑击），
+// 冲刺后若已进入 kill_radius 立即捕杀；否则下一 tick 由主逻辑拉回水中。
+// 仅在水中发起——避免在岸上持续追击深入陆地。
+func (s *Behave) crocStrike(w *world.World, c *core.Ctx, a *world.Animal, prey *world.Animal, r *rng.Rng) {
+	if !w.Grid.IsRiver(a.X, a.Y) {
+		return // 不在水中，不发起新的突袭（由主逻辑处理回水）
+	}
+	strike := a.Sp.StrikeRange
+	if strike <= 0 {
+		strike = 1
+	}
+	killR := a.Sp.KillRadius
+	if killR <= 0 {
+		killR = 1
+	}
+	cost := c.Params.At(a.Species+".move_cost", a.X, a.Y)
+	for i := 0; i < strike; i++ {
+		// 一旦贴近猎物就停止冲刺并捕杀
+		if chebyshev(a.X, a.Y, prey.X, prey.Y) <= killR {
+			break
+		}
+		dx, dy := sign(prey.X-a.X), sign(prey.Y-a.Y)
+		if dx == 0 && dy == 0 {
+			break
+		}
+		nx, ny := a.X+dx, a.Y+dy
+		if !w.Grid.InBounds(nx, ny) {
+			break
+		}
+		// 突袭移动：绕过白名单限制（允许上岸），但仍扣移动成本
+		a.X, a.Y = nx, ny
+		a.Energy -= cost
+		a.Moved = true
+		c.Ledger.Add(a.Species+".move", -cost)
+	}
+	// 冲刺结束后若已贴近猎物，立即捕杀
+	if chebyshev(a.X, a.Y, prey.X, prey.Y) <= killR && a.HuntCool <= 0 {
+		s.hunt(w, c, a, prey, r)
+	}
+}
+
+// returnToWater 鳄鱼从岸上回到最近的水格（切比雪夫距离最近的河流格），恢复水域伏击姿态。
+func (s *Behave) returnToWater(w *world.World, c *core.Ctx, a *world.Animal) {
+	bestX, bestY := -1, -1
+	bestDist := 1 << 30
+	for _, d := range directions {
+		nx, ny := a.X+d[0], a.Y+d[1]
+		if !w.Grid.IsRiver(nx, ny) {
+			continue
+		}
+		dd := chebyshev(nx, ny, a.X, a.Y)
+		if dd < bestDist {
+			bestDist, bestX, bestY = dd, nx, ny
+		}
+	}
+	if bestX < 0 {
+		return // 周围无水域（异常），原地
+	}
+	cost := c.Params.At(a.Species+".move_cost", a.X, a.Y)
+	a.X, a.Y = bestX, bestY
+	a.Energy -= cost
+	a.Moved = true
+	c.Ledger.Add(a.Species+".move", -cost)
+}
+
+// crocPatrol 鳄鱼饥饿巡游：沿河移动 1 格（只在水中），主动寻找猎物；刚需，不受 move_chance 限制。
+func (s *Behave) crocPatrol(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) {
+	start := r.Intn(len(directions))
+	for i := 0; i < len(directions); i++ {
+		d := directions[(start+i)%len(directions)]
+		if s.move(w, c, a, d[0], d[1]) {
+			return
+		}
+	}
+	// 所有方向都不可进入（罕见），原地
+}
+
+// crocIdle 鳄鱼待机：按 move_chance 决定是否在水中随机挪动 1 格，否则静止（低代谢伏击）。
+func (s *Behave) crocIdle(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) {
+	if !s.rollMove(c, a, r) {
+		return // 静止：代谢按 idle_metabolism_mult 打折
+	}
+	// 在水中随机挪动（移出后方向若不可进入则放弃本次移动）
+	start := r.Intn(len(directions))
+	for i := 0; i < len(directions); i++ {
+		d := directions[(start+i)%len(directions)]
+		if s.move(w, c, a, d[0], d[1]) {
+			return
+		}
+	}
+}
+
+// rollMove 按物种 move_chance 判定本 tick 是否允许移动（rng 消耗固定为 1 次，
+// 保证行为确定性）。move_chance<=0 时视为总是允许（兼容未配置的物种）。
+func (s *Behave) rollMove(c *core.Ctx, a *world.Animal, r *rng.Rng) bool {
+	chance := c.Params.At(a.Species+".move_chance", a.X, a.Y)
+	if chance <= 0 {
+		return true
+	}
+	if chance >= 1 {
+		return true
+	}
+	return r.Float64() < chance
 }
 
 // juvenileTiger 幼虎行为：饥饿时优先吃尸体/捕猎，饱腹时跟随最近成年同类。
@@ -483,46 +779,49 @@ func (s *Behave) tryReproduce(w *world.World, c *core.Ctx, a *world.Animal) bool
 	return true
 }
 
-func (s *Behave) hunt(w *world.World, c *core.Ctx, tiger, deer *world.Animal, r *rng.Rng) {
-	success := r.Chance(c.Params.At("tiger.hunt_success", tiger.X, tiger.Y))
+// hunt 捕食者捕杀猎物（物种无关：参数与账本 key 都按捕食者物种动态取，
+// 因此虎仍是 tiger.*、鳄鱼是 crocodile.*，互不干扰）。
+func (s *Behave) hunt(w *world.World, c *core.Ctx, predator, prey *world.Animal, r *rng.Rng) {
+	pname := predator.Species
+	success := r.Chance(c.Params.At(pname+".hunt_success", predator.X, predator.Y))
 	if success {
-		cap := energyCap(c, tiger)
-		gain := math.Min(tiger.Sp.Hunt.Gain, math.Max(0, cap-tiger.Energy))
-		tiger.Energy += gain
-		deer.Dead = true
-		deer.Cause = "predated"
-		sp := c.Cfg.Species[deer.Species]
-		// 尸体量 = 鹿被吃后剩余的能量（虎吃光了则无尸体）
-		remain := math.Max(0, deer.Energy-gain)
-		w.AddCorpse(deer.Species, deer.X, deer.Y, remain, sp.Corpse.Ticks)
-		// 捕杀后进入冷却，避免连续屠戮周围鹿
-		tiger.HuntCool = tiger.Sp.HuntCooldown
-		c.Ledger.AddTransfer("deer.tiger", gain)
-		c.Ledger.Add("corpse.residual", -(deer.Energy - gain))
+		cap := energyCap(c, predator)
+		gain := math.Min(predator.Sp.Hunt.Gain, math.Max(0, cap-predator.Energy))
+		predator.Energy += gain
+		prey.Dead = true
+		prey.Cause = "predated"
+		sp := c.Cfg.Species[prey.Species]
+		// 尸体量 = 猎物被吃后剩余的能量（捕食者吃光了则无尸体）
+		remain := math.Max(0, prey.Energy-gain)
+		w.AddCorpse(prey.Species, prey.X, prey.Y, remain, sp.Corpse.Ticks)
+		// 捕杀后进入冷却，避免连续屠戮周围猎物
+		predator.HuntCool = predator.Sp.HuntCooldown
+		c.Ledger.AddTransfer(prey.Species+"."+pname, gain)
+		c.Ledger.Add("corpse.residual", -(prey.Energy - gain))
 		c.Metrics.Predated()
-		c.Ev.Emit(w.Tick, "hunt", tiger.ID, deer.ID, gain)
-		c.Ev.Emit(w.Tick, "died", deer.ID, tiger.ID, deathCode("predated"))
+		c.Ev.Emit(w.Tick, "hunt", predator.ID, prey.ID, gain)
+		c.Ev.Emit(w.Tick, "died", prey.ID, predator.ID, deathCode("predated"))
 		return
 	}
 
-	tigerCost := tiger.Sp.Hunt.FailTigerCost
-	deerCost := tiger.Sp.Hunt.FailDeerCost
-	tiger.Energy -= tigerCost
-	deer.Energy -= deerCost
-	c.Ledger.Add("tiger.hunt_fail", -tigerCost)
-	c.Ledger.Add("deer.hunt_fail", -deerCost)
-	deerR := rng.New(w.Seed, rng.StreamBehavior, w.Tick, deer.ID)
-	dir := directions[deerR.Intn(len(directions))]
-	jump := tiger.Sp.Hunt.FleeJump
+	predCost := predator.Sp.Hunt.FailTigerCost
+	preyCost := predator.Sp.Hunt.FailDeerCost
+	predator.Energy -= predCost
+	prey.Energy -= preyCost
+	c.Ledger.Add(pname+".hunt_fail", -predCost)
+	c.Ledger.Add(prey.Species+".hunt_fail", -preyCost)
+	preyR := rng.New(w.Seed, rng.StreamBehavior, w.Tick, prey.ID)
+	dir := directions[preyR.Intn(len(directions))]
+	jump := predator.Sp.Hunt.FleeJump
 	for i := 0; i < jump; i++ {
-		nx, ny := deer.X+dir[0], deer.Y+dir[1]
+		nx, ny := prey.X+dir[0], prey.Y+dir[1]
 		// 逃窜不能穿过不可穿越地形（如河流），碰到即停
-		if !w.CanEnter(nx, ny, deer.Sp) {
+		if !w.CanEnter(nx, ny, prey.Sp) {
 			break
 		}
-		deer.X, deer.Y = nx, ny
+		prey.X, prey.Y = nx, ny
 	}
-	c.Ev.Emit(w.Tick, "hunt", tiger.ID, deer.ID, 0)
+	c.Ev.Emit(w.Tick, "hunt", predator.ID, prey.ID, 0)
 }
 
 func (s *Behave) wander(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) {
@@ -542,6 +841,7 @@ func (s *Behave) move(w *world.World, c *core.Ctx, a *world.Animal, dx, dy int) 
 	cost := c.Params.At(a.Species+".move_cost", a.X, a.Y)
 	a.X, a.Y = nx, ny
 	a.Energy -= cost
+	a.Moved = true // 标记本 tick 移动过（静止代谢判定）
 	c.Ledger.Add(a.Species+".move", -cost)
 	return true
 }

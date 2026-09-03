@@ -12,6 +12,7 @@ func NewPipeline() *core.Scheduler {
 		&ResolveModifiers{},
 		&GrowGrass{},
 		&DecayCorpses{},
+		&HatchEggs{},
 		&RebuildIndex{},
 		&Behave{},
 		&Metabolism{},

@@ -45,18 +45,30 @@ func (g *Grid) NearRiver(x, y, r int) bool {
 	return false
 }
 
-// IsBlocked 判断某格是否对给定物种不可进入（按物种声明的 blocked_terrains）。
-// blocked 传入物种的 BlockedTerrains 解析结果：包含 "river" 则河流阻挡该物种。
-func (g *Grid) IsBlocked(x, y int, blocked map[string]bool) bool {
+// terrainName 把地形枚举转成配置里使用的名字，与 Species 的 terrains 配置对应。
+func terrainName(t byte) string {
+	switch t {
+	case TerrainRiver:
+		return "river"
+	default:
+		return "land"
+	}
+}
+
+// IsBlocked 判断某格是否对给定物种不可进入。
+// blocked 为黑名单（Species.BlockedTerrains 解析结果），allowed 为白名单
+// （Species.AllowedTerrains 解析结果）。白名单非空时优先：必须命中白名单才可通过；
+// 否则按黑名单判断。两者都为空则不限制。
+func (g *Grid) IsBlocked(x, y int, blocked, allowed map[string]bool) bool {
 	if !g.InBounds(x, y) {
 		return true
 	}
-	if len(blocked) == 0 {
-		return false
+	name := terrainName(g.Terrain[g.Idx(x, y)])
+	if len(allowed) > 0 {
+		return !allowed[name] // 白名单：只能进入声明的地形（如鳄鱼只能在水里）
 	}
-	switch g.Terrain[g.Idx(x, y)] {
-	case TerrainRiver:
-		return blocked["river"]
+	if len(blocked) > 0 {
+		return blocked[name]
 	}
 	return false
 }
@@ -73,6 +85,8 @@ type Animal struct {
 	Cause    string
 	Satiated bool // 饱食惰性：吃饱后停止进食/捕猎，降到饥饿阈值以下才恢复
 	HuntCool int // 捕杀冷却剩余 tick：捕杀后需休息，避免连续屠戮周围鹿
+	EggCool  int // 产蛋冷却剩余 tick：产蛋后需间隔，避免每 tick 连续产蛋
+	Moved    bool // 本 tick 是否发生过移动（供"静止代谢更低"判定，每 tick 由 Behave 清零）
 	Sp       *config.Species // 物种静态参数缓存（避免每 tick 字符串拼接查表）
 }
 
@@ -82,6 +96,17 @@ type Corpse struct {
 	X, Y       int
 	Total      float64
 	Remaining  float64
+	TotalTicks int
+	TicksLeft  int
+}
+
+// Egg 鳄鱼蛋等卵生实体的蛋：倒计时孵化，到 0 时产出若干幼崽。
+// Energy 记录母体产蛋时转移入蛋的能量，孵化时分配给幼崽（保证能量守恒）。
+type Egg struct {
+	ID         int
+	Species    string
+	X, Y       int
+	Energy     float64
 	TotalTicks int
 	TicksLeft  int
 }
@@ -108,6 +133,7 @@ type World struct {
 	Grid         Grid
 	Animals      []*Animal
 	Corpses      []*Corpse
+	Eggs         []*Egg
 	byID         map[int]*Animal
 	NextID       int
 	Weather      env.WeatherState
@@ -138,12 +164,12 @@ func Gen(cfg *config.Root, seed uint64) *World {
 	occupied := make(map[[2]int]bool)
 	spawn := func(species string, x, y int, energy float64) *Animal {
 		sp := cfg.Species[species]
-		blocked := sp.BlockedSet()
-		// 在目标位置附近找一个空位（避开不可穿越地形，如鹿避开河流）
+		blocked, allowed := sp.BlockedSet(), sp.AllowedSet()
+		// 在目标位置附近找一个空位（避开不可进入地形，如鹿避开河流）
 		for dx := -2; dx <= 2; dx++ {
 			for dy := -2; dy <= 2; dy++ {
 				nx, ny := x+dx, y+dy
-				if w.Grid.IsBlocked(nx, ny, blocked) {
+				if w.Grid.IsBlocked(nx, ny, blocked, allowed) {
 					continue
 				}
 				if occupied[[2]int{nx, ny}] {
@@ -204,8 +230,52 @@ func Gen(cfg *config.Root, seed uint64) *World {
 	}
 	spawnPack("deer", cfg.Balance.Init.DeerPacks, cfg.Balance.Init.PackAdults, cfg.Balance.Init.PackJuveniles, cfg.Balance.EnergyCap, cfg.Species["deer"].Reproduce.ChildEnergy)
 	spawnPack("tiger", cfg.Balance.Init.TigerPacks, cfg.Balance.Init.PackAdults, cfg.Balance.Init.PackJuveniles, cfg.Balance.EnergyCap, cfg.Species["tiger"].Reproduce.ChildEnergy)
+	// 鳄鱼：只能在水里，因此沿河流格均匀铺开（而非按网格族群分布）
+	spawnAquatic(w, cfg, r, occupied)
 	w.Weather = env.InitialWeather(cfg, r)
 	return w
+}
+
+// spawnAquatic 为"只能在水中"的物种（allowed_terrains 含 river）沿河流格均匀铺开生成个体。
+// 收集全部河流格 → Fisher-Yates 洗牌 → 顺序取前 N 个，保证沿整条河随机散布而非挤在一段。
+func spawnAquatic(w *World, cfg *config.Root, r *rng.Rng, occupied map[[2]int]bool) {
+	count := cfg.Balance.Init.CrocodileCount
+	if count <= 0 {
+		return
+	}
+	sp, ok := cfg.Species["crocodile"]
+	if !ok {
+		return
+	}
+	// 收集所有未被占用的河流格
+	cells := make([][2]int, 0)
+	for y := 0; y < w.Grid.H; y++ {
+		for x := 0; x < w.Grid.W; x++ {
+			if !w.Grid.IsRiver(x, y) || occupied[[2]int{x, y}] {
+				continue
+			}
+			cells = append(cells, [2]int{x, y})
+		}
+	}
+	if len(cells) == 0 {
+		return // 地图无河流，无法生成水生动物
+	}
+	// Fisher-Yates 洗牌后取前 count 个，实现沿河随机均匀散布
+	for i := len(cells) - 1; i > 0; i-- {
+		j := r.Intn(i + 1)
+		cells[i], cells[j] = cells[j], cells[i]
+	}
+	n := count
+	if n > len(cells) {
+		n = len(cells)
+	}
+	for i := 0; i < n; i++ {
+		x, y := cells[i][0], cells[i][1]
+		occupied[[2]int{x, y}] = true
+		a := w.AddAnimal("crocodile", &sp, x, y, cfg.Balance.EnergyCap,
+			rng.New(w.Seed, rng.StreamLifespan, 0, w.NextID).IntRange(sp.Lifespan[0], sp.Lifespan[1]))
+		a.Age = sp.Reproduce.MatureAge // 初始为成年
+	}
 }
 
 func clamp(v, lo, hi float64) float64 {
@@ -422,9 +492,9 @@ func genRiver(w *World, r *rng.Rng) {
 	}
 }
 
-// CanEnter 统一判断某物种能否进入某格：越界或落在该物种不可穿越的地形上则不可进入。
+// CanEnter 统一判断某物种能否进入某格：越界或地形不允许（黑名单/白名单）则不可进入。
 func (w *World) CanEnter(x, y int, sp *config.Species) bool {
-	return !w.Grid.IsBlocked(x, y, sp.BlockedSet())
+	return !w.Grid.IsBlocked(x, y, sp.BlockedSet(), sp.AllowedSet())
 }
 
 func (w *World) AddAnimal(species string, sp *config.Species, x, y int, energy float64, lifespan int) *Animal {
@@ -467,6 +537,13 @@ func (w *World) AddCorpse(species string, x, y int, total float64, ticks int) *C
 	w.NextID++
 	w.Corpses = append(w.Corpses, c)
 	return c
+}
+
+func (w *World) AddEgg(species string, x, y, ticks int, energy float64) *Egg {
+	e := &Egg{ID: w.NextID, Species: species, X: x, Y: y, Energy: energy, TotalTicks: ticks, TicksLeft: ticks}
+	w.NextID++
+	w.Eggs = append(w.Eggs, e)
+	return e
 }
 
 type SpatialIndex interface {

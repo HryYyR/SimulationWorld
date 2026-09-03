@@ -39,10 +39,11 @@ type Balance struct {
 		Grass         float64 `json:"grass"`
 		Nutrient      float64 `json:"nutrient"`
 		Noise         float64 `json:"noise"`
-		DeerPacks     int     `json:"deer_packs"`
-		TigerPacks    int     `json:"tiger_packs"`
-		PackAdults    int     `json:"pack_adults"`
-		PackJuveniles int     `json:"pack_juveniles"`
+		DeerPacks      int     `json:"deer_packs"`
+		TigerPacks     int     `json:"tiger_packs"`
+		PackAdults     int     `json:"pack_adults"`
+		PackJuveniles  int     `json:"pack_juveniles"`
+		CrocodileCount int     `json:"crocodile_count"`
 	} `json:"init"`
 	EnergyCap float64 `json:"energy_cap"`
 	Scavenge  struct {
@@ -72,6 +73,19 @@ type Species struct {
 	HuntCooldown           int       `json:"hunt_cooldown,omitempty"`
 	Corpse                 Corpse    `json:"corpse"`
 	BlockedTerrains        []string  `json:"blocked_terrains,omitempty"`
+	AllowedTerrains        []string  `json:"allowed_terrains,omitempty"`
+	IdleMetabolismMult     float64   `json:"idle_metabolism_mult,omitempty"`
+	MoveChance             float64   `json:"move_chance,omitempty"`
+	AmbushRadius           int       `json:"ambush_radius,omitempty"`
+	StrikeRange            int       `json:"strike_range,omitempty"`
+	Egg                    Egg       `json:"egg,omitempty"`
+}
+
+// Egg 卵生繁殖参数：产蛋冷却与孵化时间波动范围。
+type Egg struct {
+	Cooldown int `json:"cooldown"`
+	HatchMin int `json:"hatch_min"`
+	HatchMax int `json:"hatch_max"`
 }
 
 type Diet struct {
@@ -103,13 +117,26 @@ type Corpse struct {
 	Nutrient float64 `json:"nutrient"`
 }
 
-// BlockedSet 返回物种不可穿越的地形名集合（如 {"river": true}），供地形阻挡判断复用。
+// BlockedSet 返回物种不可穿越的地形名集合（黑名单，如 {"river": true}）。
 func (s *Species) BlockedSet() map[string]bool {
 	if len(s.BlockedTerrains) == 0 {
 		return nil
 	}
 	m := make(map[string]bool, len(s.BlockedTerrains))
 	for _, t := range s.BlockedTerrains {
+		m[t] = true
+	}
+	return m
+}
+
+// AllowedSet 返回物种唯一可停留的地形名集合（白名单，如鳄鱼 {"river": true}）。
+// 为空表示不限制（陆地物种）。与 BlockedSet 二选一使用，白名单优先。
+func (s *Species) AllowedSet() map[string]bool {
+	if len(s.AllowedTerrains) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(s.AllowedTerrains))
+	for _, t := range s.AllowedTerrains {
 		m[t] = true
 	}
 	return m
@@ -269,17 +296,27 @@ func (r *Root) BaseSlots() map[string]float64 {
 		m[prefix+"lifespan_max"] = float64(sp.Lifespan[1])
 		m[prefix+"corpse_ticks"] = float64(sp.Corpse.Ticks)
 		m[prefix+"corpse_nutrient"] = sp.Corpse.Nutrient
-		if name == "deer" {
+		// 按"是否配置了对应能力"暴露，避免硬编码物种名：新增捕食者/食草动物无需改这里
+		if sp.Diet.Rate > 0 {
 			m[prefix+"eat_rate"] = sp.Diet.Rate
 			m[prefix+"eat_efficiency"] = sp.Diet.Efficiency
 			m[prefix+"dung_nutrient"] = sp.Diet.DungNutrient
 		}
-		if name == "tiger" {
+		if sp.Hunt.Gain > 0 || sp.Hunt.Success > 0 {
 			m[prefix+"hunt_success"] = sp.Hunt.Success
 			m[prefix+"hunt_gain"] = sp.Hunt.Gain
 			m[prefix+"hunt_fail_tiger_cost"] = sp.Hunt.FailTigerCost
 			m[prefix+"hunt_fail_deer_cost"] = sp.Hunt.FailDeerCost
 			m[prefix+"hunt_flee_jump"] = float64(sp.Hunt.FleeJump)
+		}
+		if sp.IdleMetabolismMult > 0 {
+			m[prefix+"idle_metabolism_mult"] = sp.IdleMetabolismMult
+		}
+		if sp.MoveChance > 0 {
+			m[prefix+"move_chance"] = sp.MoveChance
+		}
+		if sp.AmbushRadius > 0 {
+			m[prefix+"ambush_radius"] = float64(sp.AmbushRadius)
 		}
 	}
 	return m
