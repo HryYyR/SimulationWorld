@@ -12,9 +12,7 @@ type ResolveModifiers struct{}
 func (s *ResolveModifiers) Name() string { return "resolveModifiers" }
 
 func (s *ResolveModifiers) Step(w *world.World, c *core.Ctx) {
-	season := env.SeasonOf(w.Tick, c.Cfg.Balance.Time.TicksPerSeason)
-	globals := append([]modifier.Modifier(nil), env.WeatherModifiers(c.Cfg, w.Weather.Current)...)
-	globals = append(globals, env.SeasonModifiers(c.Cfg, season)...)
+	globals := env.ClimateModifiers(c.Cfg, &w.Climate)
 	scoped := make([]modifier.Scoped, 0)
 
 	retained := make([]modifier.Timed, 0, len(c.Timed))

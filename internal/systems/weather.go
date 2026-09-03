@@ -7,27 +7,16 @@ import (
 	"ecosim/internal/world"
 )
 
-type StepWeather struct{}
+type StepClimate struct{}
 
-func (s *StepWeather) Name() string { return "stepWeather" }
+func (s *StepClimate) Name() string { return "stepClimate" }
 
-func (s *StepWeather) Step(w *world.World, c *core.Ctx) {
+func (s *StepClimate) Step(w *world.World, c *core.Ctx) {
 	r := rng.New(w.Seed, rng.StreamWeather, w.Tick, 0)
-	season := env.SeasonOf(w.Tick, c.Cfg.Balance.Time.TicksPerSeason)
-	next, changed := env.AdvanceWeather(c.Cfg, season, w.Weather, r)
-	if changed {
-		w.Weather = next
-		c.Ev.Emit(w.Tick, "weather_changed", 0, 0, float64(weatherIndex(c, next.Current)))
-	} else {
-		w.Weather = next
+	old := env.SeasonOf(w.Tick, w.Climate.SeasonBounds)
+	env.StepClimate(&w.Climate, w.Tick, c.Cfg, r)
+	next := env.SeasonOf(w.Tick, w.Climate.SeasonBounds)
+	if old != next {
+		c.Ev.Emit(w.Tick, "season_changed", int(old), int(next), float64(w.Tick))
 	}
-}
-
-func weatherIndex(c *core.Ctx, state string) int {
-	for i, s := range c.Cfg.Weather.States {
-		if s == state {
-			return i
-		}
-	}
-	return -1
 }

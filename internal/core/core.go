@@ -57,11 +57,6 @@ type RemovePayload struct {
 	EntityID int
 }
 
-type WeatherPayload struct {
-	State string
-	Ticks int
-}
-
 type ParamPayload struct {
 	Key  string
 	Mult float64
@@ -71,13 +66,12 @@ type ParamPayload struct {
 }
 
 type Command struct {
-	ID           int
-	Tick         int
-	Type         string
-	Spawn        *SpawnPayload
-	Remove       *RemovePayload
-	WeatherForce *WeatherPayload
-	ParamMod     *ParamPayload
+	ID       int
+	Tick     int
+	Type     string
+	Spawn    *SpawnPayload
+	Remove   *RemovePayload
+	ParamMod *ParamPayload
 }
 
 func SortCommands(cmds []Command) {

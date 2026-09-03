@@ -7,7 +7,6 @@ import (
 type Command = core.Command
 type SpawnPayload = core.SpawnPayload
 type RemovePayload = core.RemovePayload
-type WeatherPayload = core.WeatherPayload
 type ParamPayload = core.ParamPayload
 
 type Queue struct {

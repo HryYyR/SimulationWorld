@@ -19,10 +19,12 @@ func (s *DecayCorpses) Step(w *world.World, c *core.Ctx) {
 	corpses := append([]*world.Corpse(nil), w.Corpses...)
 	sort.Slice(corpses, func(i, j int) bool { return corpses[i].ID < corpses[j].ID })
 	nutrientCap := c.Params.Get("grass.nutrient_cap")
+	decayMult := c.Params.Get("corpse.decay_mult")
 	retained := make([]*world.Corpse, 0, len(corpses))
 
 	for _, corpse := range corpses {
-		release := corpse.Total / float64(corpse.TotalTicks)
+		// 腐烂速度受气候（温度）修饰：高温加速、低温减速
+		release := (corpse.Total / float64(corpse.TotalTicks)) * decayMult
 		release = math.Min(release, corpse.Remaining)
 		s.addNutrient(w, corpse.X, corpse.Y, release*0.7, nutrientCap)
 		share := release * 0.3 / 8

@@ -12,7 +12,7 @@ import (
 type Root struct {
 	Balance   Balance            `json:"balance"`
 	Species   map[string]Species `json:"species"`
-	Weather   Weather            `json:"weather"`
+	Climate   Climate            `json:"climate"`
 	HashValue string             `json:"config_hash,omitempty"`
 }
 
@@ -23,9 +23,10 @@ type Balance struct {
 		Height int `json:"height"`
 		Seed   int `json:"seed"`
 	} `json:"world"`
-	Time struct {
-		TicksPerSeason int `json:"ticks_per_season"`
-	} `json:"time"`
+	Climate struct {
+		TotalTicksMin int `json:"total_ticks_min"`
+		TotalTicksMax int `json:"total_ticks_max"`
+	} `json:"climate"`
 	Grass struct {
 		GrowthBase               float64 `json:"growth_base"`
 		GrowthNutrientCoeff      float64 `json:"growth_nutrient_coeff"`
@@ -143,19 +144,25 @@ func (s *Species) AllowedSet() map[string]bool {
 	return m
 }
 
-type Weather struct {
-	States          []string                        `json:"states"`
-	Duration        map[string][2]int               `json:"duration"`
-	Transitions     map[string]map[string][]float64 `json:"transitions"`
-	Modifiers       map[string][]ModifierSpec       `json:"modifiers"`
-	SeasonModifiers map[string][]ModifierSpec       `json:"season_modifiers"`
+// Climate 热带草原气候配置：四段季节（湿季初期/湿季盛期/旱季初期/旱季末期）的基准温度与降雨量，
+// 以及把温度/降雨量映射为生态系数的参数。
+type Climate struct {
+	SeasonBase map[string]SeasonBase `json:"season_base"`
+	// 草生长：温度高斯峰值与宽度、降雨饱和上限
+	GrassTempOpt  float64 `json:"grass_temp_opt"`
+	GrassTempSd   float64 `json:"grass_temp_sd"`
+	GrassRainSat  float64 `json:"grass_rain_sat"`
+	// 尸体腐烂：温度敏感系数与参考温度
+	DecayTempSens float64 `json:"decay_temp_sens"`
+	DecayTempRef  float64 `json:"decay_temp_ref"`
+	// 代谢：舒适温度与偏离惩罚系数
+	MetabComfortTemp float64 `json:"metab_comfort_temp"`
+	MetabTempSens    float64 `json:"metab_temp_sens"`
 }
 
-type ModifierSpec struct {
-	Key      string  `json:"key"`
-	Mult     float64 `json:"mult,omitempty"`
-	Add      float64 `json:"add,omitempty"`
-	Priority int     `json:"priority,omitempty"`
+type SeasonBase struct {
+	Temperature float64 `json:"temperature"`
+	Rainfall    float64 `json:"rainfall"`
 }
 
 func LoadDir(dir string) (*Root, error) {
@@ -167,11 +174,11 @@ func LoadDir(dir string) (*Root, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load species: %w", err)
 	}
-	weather, err := readJSON[Weather](filepath.Join(dir, "weather.json"))
+	climate, err := readJSON[Climate](filepath.Join(dir, "weather.json"))
 	if err != nil {
 		return nil, fmt.Errorf("load weather: %w", err)
 	}
-	r := &Root{Balance: balance, Species: species, Weather: weather}
+	r := &Root{Balance: balance, Species: species, Climate: climate}
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
@@ -200,8 +207,8 @@ func (r *Root) Validate() error {
 	if r.Balance.World.Width <= 0 || r.Balance.World.Height <= 0 {
 		return fmt.Errorf("world dimensions must be positive")
 	}
-	if r.Balance.Time.TicksPerSeason <= 0 {
-		return fmt.Errorf("ticks_per_season must be positive")
+	if r.Balance.Climate.TotalTicksMin <= 0 || r.Balance.Climate.TotalTicksMax < r.Balance.Climate.TotalTicksMin {
+		return fmt.Errorf("climate total_ticks range is invalid")
 	}
 	if _, ok := r.Species["deer"]; !ok {
 		return fmt.Errorf("species deer is required")
@@ -223,25 +230,8 @@ func (r *Root) Validate() error {
 			return fmt.Errorf("species %s has invalid corpse values", name)
 		}
 	}
-	if len(r.Weather.States) == 0 {
-		return fmt.Errorf("weather states are required")
-	}
-	for state, row := range r.Weather.Transitions {
-		for from, probs := range row {
-			if len(probs) != len(r.Weather.States) {
-				return fmt.Errorf("weather transition %s/%s has wrong length", state, from)
-			}
-			sum := 0.0
-			for _, p := range probs {
-				if p < 0 || p > 1 {
-					return fmt.Errorf("weather transition %s/%s has invalid probability", state, from)
-				}
-				sum += p
-			}
-			if sum <= 0.99 || sum >= 1.01 {
-				return fmt.Errorf("weather transition %s/%s probabilities sum to %g", state, from, sum)
-			}
-		}
+	if len(r.Climate.SeasonBase) == 0 {
+		return fmt.Errorf("climate season_base is required")
 	}
 	return nil
 }
@@ -273,6 +263,7 @@ func (r *Root) BaseSlots() map[string]float64 {
 		"global.energy_cap":                r.Balance.EnergyCap,
 		"global.scavenge_rate":             r.Balance.Scavenge.Rate,
 		"global.scavenge_efficiency":       r.Balance.Scavenge.Efficiency,
+		"corpse.decay_mult":                1,
 	}
 	for name, sp := range r.Species {
 		prefix := name + "."

@@ -258,7 +258,9 @@ type Snapshot struct {
 	Animals      []AnimalView     `json:"animals"`
 	Corpses      []CorpseView     `json:"corpses"`
 	Eggs         []EggView        `json:"eggs"`
-	Weather      env.WeatherState `json:"weather"`
+	Temperature  float64          `json:"temperature"`
+	Rainfall     float64          `json:"rainfall"`
+	Season       string           `json:"season"`
 	StateHash    uint64           `json:"state_hash"`
 	Events       []Event          `json:"events"`
 	Samples      []Sample         `json:"samples"`
@@ -283,7 +285,9 @@ func SnapshotFromWorld(w *world.World, cfg *config.Root, events []Event, samples
 		Grass:        append([]float64(nil), w.Grid.Grass...),
 		Nutrient:     append([]float64(nil), w.Grid.Nutrient...),
 		Terrain:      terrainToInts(w.Grid.Terrain),
-		Weather:      w.Weather,
+		Temperature:  w.Climate.Temperature,
+		Rainfall:     w.Climate.Rainfall,
+		Season:       env.SeasonOf(w.Tick, w.Climate.SeasonBounds).String(),
 		StateHash:    StateHash(w),
 		Events:       append([]Event(nil), events...),
 		Samples:      append([]Sample(nil), samples...),
@@ -384,7 +388,11 @@ func StateHash(w *world.World) uint64 {
 		put(uint64(e.TotalTicks))
 		put(uint64(e.TicksLeft))
 	}
-	putString(w.Weather.Current)
-	put(uint64(w.Weather.Left))
+	put(uint64(w.Climate.SeasonBounds[0]))
+	put(uint64(w.Climate.SeasonBounds[1]))
+	put(uint64(w.Climate.SeasonBounds[2]))
+	put(uint64(w.Climate.SeasonBounds[3]))
+	putFloat(w.Climate.Temperature)
+	putFloat(w.Climate.Rainfall)
 	return h.Sum64()
 }

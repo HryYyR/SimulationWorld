@@ -1,7 +1,7 @@
 {
-  "rules_version": 19,
+  "rules_version": 20,
   "world": { "width": 128, "height": 128, "seed": 20260902 },
-  "time": { "ticks_per_season": 100 },
+  "climate": { "total_ticks_min": 300, "total_ticks_max": 600 },
   "grass": {
     "growth_base": 0.05,
     "growth_nutrient_coeff": 0.001,

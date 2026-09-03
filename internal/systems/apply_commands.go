@@ -2,7 +2,6 @@ package systems
 
 import (
 	"ecosim/internal/core"
-	"ecosim/internal/env"
 	"ecosim/internal/modifier"
 	"ecosim/internal/rng"
 	"ecosim/internal/world"
@@ -57,16 +56,6 @@ func (s *ApplyCommands) apply(w *world.World, c *core.Ctx, cmd core.Command) {
 			w.RemoveAnimal(a.ID)
 			c.Ev.Emit(w.Tick, "removed", a.ID, cmd.ID, a.Energy)
 		}
-	case "weather_force":
-		if cmd.WeatherForce == nil || env.ValidateState(c.Cfg, cmd.WeatherForce.State) != nil {
-			return
-		}
-		left := cmd.WeatherForce.Ticks
-		if left <= 0 {
-			left = 1
-		}
-		w.Weather = env.WeatherState{Current: cmd.WeatherForce.State, Left: left}
-		c.Ev.Emit(w.Tick, "weather_changed", 0, cmd.ID, float64(weatherIndex(c, cmd.WeatherForce.State)))
 	case "param_mod":
 		if cmd.ParamMod == nil || cmd.ParamMod.TTL <= 0 || cmd.ParamMod.Key == "" {
 			return

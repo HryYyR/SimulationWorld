@@ -139,13 +139,20 @@ function renderStats(snap) {
   $('corpse').textContent = snap.corpses == null ? 0 : snap.corpses.length;
   $('grass').textContent = Math.round(grass);
   $('hash').textContent = snap.state_hash.toString(16).padStart(16, '0');
-  $('season').textContent = seasonName(snap.tick);
-  $('weather').textContent = snap.weather ? snap.weather.current : '-';
+  $('season').textContent = seasonName(snap.season);
+  $('temperature').textContent = snap.temperature != null ? snap.temperature.toFixed(1) + '℃' : '-';
+  $('rainfall').textContent = snap.rainfall != null ? snap.rainfall.toFixed(1) + 'mm' : '-';
 }
 
-function seasonName(tick) {
-  const perSeason = 100; // 与后端配置一致（默认），这里做近似展示
-  return ['春', '夏', '秋', '冬'][Math.floor(tick / perSeason) % 4];
+// 季节名（后端返回 wet_early/wet_peak/dry_early/dry_late）→ 中文
+function seasonName(key) {
+  const names = {
+    wet_early: '湿季初期',
+    wet_peak: '湿季盛期',
+    dry_early: '旱季初期',
+    dry_late: '旱季末期',
+  };
+  return names[key] || key || '-';
 }
 
 // ---------- 世界网格渲染 ----------
@@ -180,13 +187,43 @@ function renderWorld(snap, t) {
   wctx.clearRect(0, 0, w, h);
   drawTerrain(snap, gw, gh, w, h, cellW, cellH);
   drawActors(snap, t === undefined ? 1 : t, cellW, cellH);
+  drawRain(snap, w, h, cellW, cellH);
 }
 
-// 绘制地形背景（草/河流的像素块）
+// 雨滴动画：降雨量越大，草地上蓝色小点越多（闪烁代表下雨）。
+// 性能：用固定上限雨滴池 + 确定性伪随机位置，每帧只画应显示数量，无额外对象分配。
+const RAIN_MAX = 200; // 雨滴池上限
+function drawRain(snap, w, h, cellW, cellH) {
+  const rainfall = snap.rainfall || 0;
+  if (rainfall <= 0.05) return; // 几乎无雨则不画
+  // 雨滴数随降雨量线性增长，饱和于 RAIN_MAX
+  const count = Math.round(Math.min(1, rainfall / 4) * RAIN_MAX);
+  if (count <= 0) return;
+  const now = performance.now();
+  wctx.fillStyle = 'rgba(120, 180, 255, 0.7)';
+  const size = Math.max(1, cellW * 0.15);
+  for (let i = 0; i < count; i++) {
+    // 确定性伪随机位置：用 index 哈希，避免每帧重新随机导致雨滴跳变
+    const hx = (i * 2654435761) % 1000000007;
+    const hy = (i * 40503) % 1000000007;
+    const x = (hx % 1000000007) / 1000000007 * w;
+    const y = (hy % 1000000007) / 1000000007 * h;
+    // 闪烁：按时间 + index 相位让雨滴明暗交替（雨滴下落感）
+    const phase = (now * 0.01 + i * 0.7) % 1;
+    wctx.globalAlpha = 0.25 + 0.5 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 2));
+    wctx.fillRect(x, y, size, size * 1.6);
+  }
+  wctx.globalAlpha = 1;
+}
+
+// 绘制地形背景（草/河流的像素块）。草颜色受「草量（深浅）+ 湿度（色相绿↔黄）」双重影响：
+// 湿季葱绿、旱季枯黄，连续渐变。
 function drawTerrain(snap, gw, gh, w, h, cellW, cellH) {
   const img = wctx.createImageData(w, h);
   const data = img.data;
   const terrain = snap.terrain || null;
+  // 湿度：降雨量 0~4mm/tick 映射到 0~1（4 为饱和）
+  const wet = snap.rainfall != null ? Math.max(0, Math.min(1, snap.rainfall / 4)) : 0.5;
   for (let gy = 0; gy < gh; gy++) {
     for (let gx = 0; gx < gw; gx++) {
       const idx = gy * gw + gx;
@@ -196,10 +233,19 @@ function drawTerrain(snap, gw, gh, w, h, cellW, cellH) {
       if (terrain && terrain[idx] === 1) {
         r = 30; gg = 90; b = 180;
       } else {
+        // 草量决定深浅（0~1），湿度决定色相（wet=1 葱绿，wet=0 枯黄）
         const g = Math.min(1, grass / 100);
-        r = 18 + g * 40;
-        gg = 60 + g * 120;
-        b = 20 + g * 30;
+        // 湿季绿 → 旱季黄 的基准色插值
+        const greenR = 30, greenG = 120, greenB = 45;   // 葱绿
+        const dryR = 170, dryG = 135, dryB = 45;        // 枯黄
+        r = greenR + (dryR - greenR) * (1 - wet);
+        gg = greenG + (dryG - greenG) * (1 - wet);
+        b = greenB + (dryB - greenB) * (1 - wet);
+        // 草量影响深浅：草少则偏暗
+        r *= 0.4 + 0.6 * g;
+        gg *= 0.4 + 0.6 * g;
+        b *= 0.4 + 0.6 * g;
+        // 养分叠加棕色
         const n = Math.min(1, nutrient / 100);
         r += n * 40;
         gg *= (1 - n * 0.3);

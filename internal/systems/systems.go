@@ -8,7 +8,7 @@ func NewPipeline() *core.Scheduler {
 	return core.NewScheduler(
 		&ApplyCommands{},
 		&AdvanceCalendar{},
-		&StepWeather{},
+		&StepClimate{},
 		&ResolveModifiers{},
 		&GrowGrass{},
 		&DecayCorpses{},

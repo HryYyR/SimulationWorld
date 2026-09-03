@@ -136,7 +136,7 @@ type World struct {
 	Eggs         []*Egg
 	byID         map[int]*Animal
 	NextID       int
-	Weather      env.WeatherState
+	Climate      env.Climate
 }
 
 func Gen(cfg *config.Root, seed uint64) *World {
@@ -232,7 +232,8 @@ func Gen(cfg *config.Root, seed uint64) *World {
 	spawnPack("tiger", cfg.Balance.Init.TigerPacks, cfg.Balance.Init.PackAdults, cfg.Balance.Init.PackJuveniles, cfg.Balance.EnergyCap, cfg.Species["tiger"].Reproduce.ChildEnergy)
 	// 鳄鱼：只能在水里，因此沿河流格均匀铺开（而非按网格族群分布）
 	spawnAquatic(w, cfg, r, occupied)
-	w.Weather = env.InitialWeather(cfg, r)
+	// 气候：随机总 tick 并切分四段，初始化温度/降雨量（用 StreamWeather 保证确定性）
+	w.Climate = env.InitialClimate(cfg, rng.New(seed, rng.StreamWeather, 0, 0))
 	return w
 }
 
