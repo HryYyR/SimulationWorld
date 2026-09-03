@@ -77,7 +77,7 @@ func (s *Behave) juvenileDeer(w *world.World, c *core.Ctx, a *world.Animal, r *r
 		s.forage(w, c, a, r)
 		return true
 	}
-	if s.followAdult(w, c, a) {
+	if s.followAdult(w, c, a, r) {
 		return true
 	}
 	return false
@@ -128,7 +128,7 @@ func (s *Behave) juvenileTiger(w *world.World, c *core.Ctx, a *world.Animal, r *
 		s.huntNearest(w, c, a, r)
 		return true
 	}
-	return s.followAdult(w, c, a)
+	return s.followAdult(w, c, a, r)
 }
 
 // provideForYoung 饱腹成年虎：附近有幼崽且无新鲜尸体时，捕猎供幼崽食用。
@@ -212,19 +212,79 @@ func (s *Behave) isHungry(c *core.Ctx, a *world.Animal) bool {
 	return hungry <= 0 || a.Energy <= cap*hungry
 }
 
-// followAdult 幼崽跟随视野内最近的成年同类；无成年同类则原地不动。
-func (s *Behave) followAdult(w *world.World, c *core.Ctx, a *world.Animal) bool {
+// occupiedByOther 判断某格是否已被除 selfID 外的其他活体动物占用。
+// 用半径 0 的空间查询实现，只扫描目标格所在分桶，开销极低。
+func (s *Behave) occupiedByOther(c *core.Ctx, x, y, selfID int) bool {
+	if c.Index == nil {
+		return false
+	}
+	for _, o := range c.Index.AnimalsInRadius(x, y, 0, "") {
+		if !o.Dead && o.ID != selfID {
+			return true
+		}
+	}
+	return false
+}
+
+// followAdult 幼崽跟随视野内最近的成年同类：每 tick 朝其移动 1 格，目标是停在
+// 距离成年体 1~2 格的空格上（期望距离每 tick 在 1~2 间随机，表现为松散跟随而非紧贴）。
+// 选格规则：优先未被其他动物占用、且不与成年体重叠，按"贴近期望距离"评分取最优；
+// 若周围格子都被占满（格子不够），则原地不动、容忍重叠。
+func (s *Behave) followAdult(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) bool {
 	vision := a.Sp.Vision
 	mature := a.Sp.Reproduce.MatureAge
 	adult := s.nearestAdult(c, a, vision, mature)
 	if adult == nil {
 		return false // 视野内无成年同类，原地不动
 	}
-	dx, dy := sign(adult.X-a.X), sign(adult.Y-a.Y)
-	if dx == 0 && dy == 0 {
-		return false // 已在成年同类旁
+	dist := chebyshev(a.X, a.Y, adult.X, adult.Y)
+	// 期望跟随距离：1~2 格随机，让跟随位有随机性
+	want := 1 + r.Intn(2)
+	// 已在期望距离且当前格没被其他动物挤占，就保持不动（松散跟随）
+	if dist == want && !s.occupiedByOther(c, a.X, a.Y, a.ID) {
+		return false
 	}
-	s.move(w, c, a, dx, dy)
+	// 朝成年体移动 1 格：在 8 方向中挑一个"可进入 + 未被占用 + 不与成年体重叠"的格子，
+	// 评分 = |实际距离-期望距离|*10 + 实际距离，越小越优（先贴合期望距离，再尽量靠近）
+	bestX, bestY := -1, -1
+	bestScore := 1 << 30
+	// 退让候选：当前已与成年体同格时，若周围无完全空闲格，则允许落到"被其他幼崽占用
+	// 但能脱离成年体"的格子——优先保证不与成年体重叠（格子不够时的次优解）。
+	fallbackX, fallbackY := -1, -1
+	fallbackScore := 1 << 30
+	for _, d := range directions {
+		nx, ny := a.X+d[0], a.Y+d[1]
+		if !w.CanEnter(nx, ny, a.Sp) {
+			continue
+		}
+		nd := chebyshev(nx, ny, adult.X, adult.Y)
+		if nd == 0 {
+			continue // 不与成年体站在同一格
+		}
+		diff := nd - want
+		if diff < 0 {
+			diff = -diff
+		}
+		score := diff*10 + nd
+		if s.occupiedByOther(c, nx, ny, a.ID) {
+			// 被占用：仅当当前与成年体同格时作为退让候选
+			if dist == 0 && score < fallbackScore {
+				fallbackScore, fallbackX, fallbackY = score, nx, ny
+			}
+			continue // 避开已被其他动物占用的格子
+		}
+		if score < bestScore {
+			bestScore, bestX, bestY = score, nx, ny
+		}
+	}
+	if bestX < 0 {
+		if fallbackX >= 0 {
+			s.move(w, c, a, fallbackX-a.X, fallbackY-a.Y)
+			return true
+		}
+		return false // 周围无可用空格（格子不够），容忍重叠，原地不动
+	}
+	s.move(w, c, a, bestX-a.X, bestY-a.Y)
 	return true
 }
 
