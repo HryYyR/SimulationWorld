@@ -9,6 +9,7 @@ func NewPipeline() *core.Scheduler {
 		&ApplyCommands{},
 		&AdvanceCalendar{},
 		&StepClimate{},
+		&StepWater{},
 		&ResolveModifiers{},
 		&GrowGrass{},
 		&DecayCorpses{},

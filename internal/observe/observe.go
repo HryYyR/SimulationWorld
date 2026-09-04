@@ -255,6 +255,7 @@ type Snapshot struct {
 	Grass        []float64        `json:"grass"`
 	Nutrient     []float64        `json:"nutrient"`
 	Terrain      []int            `json:"terrain,omitempty"`
+	Water        []float64        `json:"water,omitempty"`
 	Animals      []AnimalView     `json:"animals"`
 	Corpses      []CorpseView     `json:"corpses"`
 	Eggs         []EggView        `json:"eggs"`
@@ -285,6 +286,7 @@ func SnapshotFromWorld(w *world.World, cfg *config.Root, events []Event, samples
 		Grass:        append([]float64(nil), w.Grid.Grass...),
 		Nutrient:     append([]float64(nil), w.Grid.Nutrient...),
 		Terrain:      terrainToInts(w.Grid.Terrain),
+		Water:        append([]float64(nil), w.Grid.Water...),
 		Temperature:  w.Climate.Temperature,
 		Rainfall:     w.Climate.Rainfall,
 		Season:       env.SeasonOf(w.Tick, w.Climate.SeasonBounds).String(),
@@ -345,6 +347,9 @@ func StateHash(w *world.World) uint64 {
 	}
 	for _, v := range w.Grid.Terrain {
 		put(uint64(v))
+	}
+	for _, v := range w.Grid.Water {
+		putFloat(v)
 	}
 	animals := append([]*world.Animal(nil), w.Animals...)
 	sort.Slice(animals, func(i, j int) bool { return animals[i].ID < animals[j].ID })

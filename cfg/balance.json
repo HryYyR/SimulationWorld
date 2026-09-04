@@ -1,5 +1,5 @@
 {
-  "rules_version": 20,
+  "rules_version": 21,
   "world": { "width": 128, "height": 128, "seed": 20260902 },
   "climate": { "total_ticks_min": 300, "total_ticks_max": 600 },
   "grass": {

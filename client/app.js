@@ -173,7 +173,8 @@ function resizeWorldCanvas(gw, gh) {
   }
 }
 
-// renderWorld(snap, t)：t 为 0~1 的插值因子，用于在 prevSnapshot→snapshot 间平滑移动动物/尸体。
+// renderWorld(snap, t)：t 为 0~1 的插值因子，用于在 prevSnapshot→snapshot 间平滑移动动物/尸体，
+// 以及平滑过渡草地/河流颜色（降雨量、水量、草量）。
 // t=1 时等价于直接画快照终态。每帧先彻底清屏，再完整重绘背景 + actors，杜绝拖影。
 function renderWorld(snap, t) {
   const gw = snap.width || GRID;    // 用后端返回的真实宽高
@@ -183,18 +184,22 @@ function renderWorld(snap, t) {
   const cellW = w / gw;
   const cellH = h / gh;
 
+  const k = t === undefined ? 1 : t;
   // 彻底清屏（覆盖 putImageData 可能的 1px 舍入缝隙）
   wctx.clearRect(0, 0, w, h);
-  drawTerrain(snap, gw, gh, w, h, cellW, cellH);
-  drawActors(snap, t === undefined ? 1 : t, cellW, cellH);
-  drawRain(snap, w, h, cellW, cellH);
+  drawTerrain(snap, k, gw, gh, w, h, cellW, cellH);
+  drawActors(snap, k, cellW, cellH);
+  drawRain(snap, k, w, h, cellW, cellH);
 }
 
 // 雨滴动画：降雨量越大，草地上蓝色小点越多（闪烁代表下雨）。
 // 性能：用固定上限雨滴池 + 确定性伪随机位置，每帧只画应显示数量，无额外对象分配。
 const RAIN_MAX = 200; // 雨滴池上限
-function drawRain(snap, w, h, cellW, cellH) {
-  const rainfall = snap.rainfall || 0;
+function drawRain(snap, k, w, h, cellW, cellH) {
+  // 降雨量在 prev→current 间插值，雨滴数量平滑增减
+  const prevRain = prevSnapshot && prevSnapshot.rainfall != null ? prevSnapshot.rainfall : snap.rainfall;
+  const curRain = snap.rainfall != null ? snap.rainfall : prevRain;
+  const rainfall = prevRain + (curRain - prevRain) * k;
   if (rainfall <= 0.05) return; // 几乎无雨则不画
   // 雨滴数随降雨量线性增长，饱和于 RAIN_MAX
   const count = Math.round(Math.min(1, rainfall / 4) * RAIN_MAX);
@@ -217,21 +222,40 @@ function drawRain(snap, w, h, cellW, cellH) {
 }
 
 // 绘制地形背景（草/河流的像素块）。草颜色受「草量（深浅）+ 湿度（色相绿↔黄）」双重影响：
-// 湿季葱绿、旱季枯黄，连续渐变。
-function drawTerrain(snap, gw, gh, w, h, cellW, cellH) {
+// 湿季葱绿、旱季枯黄，连续渐变。k 为插值因子，用于在 prev→current 快照间平滑过渡
+// 降雨量/水量/草量，避免颜色跳变闪烁。
+function drawTerrain(snap, k, gw, gh, w, h, cellW, cellH) {
   const img = wctx.createImageData(w, h);
   const data = img.data;
   const terrain = snap.terrain || null;
-  // 湿度：降雨量 0~4mm/tick 映射到 0~1（4 为饱和）
-  const wet = snap.rainfall != null ? Math.max(0, Math.min(1, snap.rainfall / 4)) : 0.5;
+  const water = snap.water || null;
+  const prevWater = prevSnapshot && prevSnapshot.water ? prevSnapshot.water : null;
+  const prevGrass = prevSnapshot && prevSnapshot.grass ? prevSnapshot.grass : null;
+  // 湿度：降雨量 0~4mm/tick 映射到 0~1（4 为饱和），在 prev→current 间插值
+  const prevRain = prevSnapshot && prevSnapshot.rainfall != null ? prevSnapshot.rainfall : snap.rainfall;
+  const curRain = snap.rainfall != null ? snap.rainfall : prevRain;
+  const rain = prevRain + (curRain - prevRain) * k;
+  const wet = Math.max(0, Math.min(1, rain / 4));
   for (let gy = 0; gy < gh; gy++) {
     for (let gx = 0; gx < gw; gx++) {
       const idx = gy * gw + gx;
-      const grass = snap.grass[idx] || 0;
+      // 草量/水量在 prev→current 间插值
+      const grass = prevGrass
+        ? (prevGrass[idx] || 0) + ((snap.grass[idx] || 0) - (prevGrass[idx] || 0)) * k
+        : (snap.grass[idx] || 0);
+      const wl = water
+        ? (prevWater ? (prevWater[idx] || 0) + (water[idx] - (prevWater[idx] || 0)) * k : water[idx])
+        : 100;
       const nutrient = snap.nutrient[idx] || 0;
       let r, gg, b;
       if (terrain && terrain[idx] === 1) {
-        r = 30; gg = 90; b = 180;
+        // 河流格：按水量着色——水量高=深蓝，水量低=泥褐色（淤泥），
+        // 中间为蓝褐色连续过渡（不再有浅蓝阶段）。
+        const s = Math.max(0, Math.min(1, wl / 100)); // 0~1，水量越高越接近深蓝
+        // 深蓝(水量100) ~ (20,60,130)，泥褐(水量0) ~ (90,70,45)
+        r = 90 - s * 70;
+        gg = 70 - s * 10;
+        b = 45 + s * 85;
       } else {
         // 草量决定深浅（0~1），湿度决定色相（wet=1 葱绿，wet=0 枯黄）
         const g = Math.min(1, grass / 100);

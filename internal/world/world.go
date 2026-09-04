@@ -15,11 +15,16 @@ const (
 	TerrainRiver byte = 1 // 河流
 )
 
+// MudWaterThreshold 淤泥判定阈值：河流格水量低于此值视为淤泥（河床裸露），
+// 鹿可进入（本质仍是河流格，鳄鱼等水生逻辑不变）。
+const MudWaterThreshold = 15.0
+
 type Grid struct {
 	W, H     int
 	Grass    []float64
 	Nutrient []float64
-	Terrain  []byte // 每格地形类型，见 Terrain* 常量
+	Terrain  []byte    // 每格地形类型，见 Terrain* 常量
+	Water    []float64 // 每格水量（0~100），仅河流格有效
 }
 
 func (g *Grid) Idx(x, y int) int { return y*g.W + x }
@@ -31,6 +36,33 @@ func (g *Grid) InBounds(x, y int) bool {
 // IsRiver 判断某格是否为河流。
 func (g *Grid) IsRiver(x, y int) bool {
 	return g.InBounds(x, y) && g.Terrain[g.Idx(x, y)] == TerrainRiver
+}
+
+// IsMud 判断某河流格是否为淤泥（水量低于阈值，河床裸露）。
+func (g *Grid) IsMud(x, y int) bool {
+	if !g.IsRiver(x, y) {
+		return false
+	}
+	return g.Water[g.Idx(x, y)] < MudWaterThreshold
+}
+
+// IsRiverEdge 判断某河流格是否为河岸边缘格（8 邻域含陆地，越靠近草地）。
+func (g *Grid) IsRiverEdge(x, y int) bool {
+	if !g.IsRiver(x, y) {
+		return false
+	}
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			nx, ny := x+dx, y+dy
+			if g.InBounds(nx, ny) && g.Terrain[g.Idx(nx, ny)] == TerrainLand {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // NearRiver 判断某格切比雪夫距离 r 内是否存在河流格（用于岸边植被加速）。
@@ -59,16 +91,23 @@ func terrainName(t byte) string {
 // blocked 为黑名单（Species.BlockedTerrains 解析结果），allowed 为白名单
 // （Species.AllowedTerrains 解析结果）。白名单非空时优先：必须命中白名单才可通过；
 // 否则按黑名单判断。两者都为空则不限制。
+// 特殊规则：某物种黑名单含 river 时，若该河流格水量低于淤泥阈值（河床裸露），
+// 视为可进入（如鹿可走到干涸的河岸淤泥上）。
 func (g *Grid) IsBlocked(x, y int, blocked, allowed map[string]bool) bool {
 	if !g.InBounds(x, y) {
 		return true
 	}
-	name := terrainName(g.Terrain[g.Idx(x, y)])
+	i := g.Idx(x, y)
+	name := terrainName(g.Terrain[i])
 	if len(allowed) > 0 {
 		return !allowed[name] // 白名单：只能进入声明的地形（如鳄鱼只能在水里）
 	}
-	if len(blocked) > 0 {
-		return blocked[name]
+	if len(blocked) > 0 && blocked[name] {
+		// 若被河流阻挡，但该格已是淤泥（水量低于阈值），则允许进入
+		if name == "river" && g.Water[i] < MudWaterThreshold {
+			return false
+		}
+		return true
 	}
 	return false
 }
@@ -149,6 +188,7 @@ func Gen(cfg *config.Root, seed uint64) *World {
 			Grass:    make([]float64, cfg.Balance.World.Width*cfg.Balance.World.Height),
 			Nutrient: make([]float64, cfg.Balance.World.Width*cfg.Balance.World.Height),
 			Terrain:  make([]byte, cfg.Balance.World.Width*cfg.Balance.World.Height),
+			Water:    make([]float64, cfg.Balance.World.Width*cfg.Balance.World.Height),
 		},
 		byID:   make(map[int]*Animal),
 		NextID: 1,
@@ -314,6 +354,7 @@ func genRiver(w *World, r *rng.Rng) {
 		w.Grid.Terrain[i] = TerrainRiver
 		w.Grid.Grass[i] = 0
 		w.Grid.Nutrient[i] = 0
+		w.Grid.Water[i] = 100 // 初始满水量，河岸格稍后按边缘距离下调
 	}
 
 	// 沿中心线序列填充河道：相邻中心点用 Bresenham 线段连接，每段填充方形河宽，
@@ -490,6 +531,19 @@ func genRiver(w *World, r *rng.Rng) {
 		}
 		branch = smooth(branch, 2)
 		fillPath(branch, 3, 1, 0) // 枝干：起点宽 3，末端收细到 1
+	}
+
+	// 河岸边缘格（8 邻域含陆地）初始水量较低，中心格保持满水。
+	// 这样旱季河岸先干涸成淤泥，越靠近草地的河岸越容易裸露。
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			if !w.Grid.IsRiver(x, y) {
+				continue
+			}
+			if w.Grid.IsRiverEdge(x, y) {
+				w.Grid.Water[w.Grid.Idx(x, y)] = 40 + r.Float64()*20 // 河岸 40~60
+			}
+		}
 	}
 }
 

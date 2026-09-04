@@ -126,7 +126,7 @@ func (s *server) advance(ticks int, w http.ResponseWriter) {
 	if err != nil {
 		// 账本守恒断言失败等错误：返回错误信息，但仍附带快照供前端查看
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{
-			"error": err.Error(),
+			"error":    err.Error(),
 			"snapshot": snap,
 		})
 		return

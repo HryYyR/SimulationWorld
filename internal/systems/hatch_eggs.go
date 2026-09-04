@@ -42,7 +42,7 @@ func (s *HatchEggs) hatch(w *world.World, c *core.Ctx, egg *world.Egg) {
 		return
 	}
 	r := rng.New(w.Seed, rng.StreamBehavior, w.Tick, egg.ID)
-	n := r.Intn(4) // 0~3 只幼崽
+	n := r.Intn(3) + 1 // 1~2 只幼崽
 	// 蛋的能量分配给 n 只幼崽（能量守恒：蛋域 → 动物域）
 	perChild := 0.0
 	if n > 0 {

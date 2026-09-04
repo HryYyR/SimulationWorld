@@ -31,7 +31,7 @@
     "kill_radius": 2,
     "hunt_cooldown": 40,
     "move_cost": 0.8,
-    "metabolism": 2.2,
+    "metabolism": 2.1,
     "hunt": {
       "success": 0.35,
       "gain": 55,
@@ -41,7 +41,7 @@
     },
     "reproduce": {
       "energy_threshold": 90,
-      "cooldown": 155,
+      "cooldown": 100,
       "cost": 40,
       "child_energy": 40,
       "mature_age": 50,
