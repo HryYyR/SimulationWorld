@@ -12,8 +12,10 @@ let busy = false;          // 是否有请求进行中
 // ---------- DOM ----------
 const worldCanvas = document.getElementById('world');
 const chartCanvas = document.getElementById('chart');
+const minimapCanvas = document.getElementById('minimap');
 const wctx = worldCanvas.getContext('2d');
 const cctx = chartCanvas.getContext('2d');
+const mctx = minimapCanvas.getContext('2d');
 const $ = (id) => document.getElementById(id);
 
 const btnPlay = $('btn-play');
@@ -156,17 +158,19 @@ function seasonName(key) {
 }
 
 // ---------- 世界网格渲染 ----------
-// 按容器实际大小自适应 canvas（保持正方形），避免超出屏幕/显示不全
-function resizeWorldCanvas(gw, gh) {
+// 视口状态：zoom 缩放倍率（1=全貌，>1 放大），cx/cy 视口中心的网格坐标（浮点）。
+let view = { zoom: 1, cx: 0, cy: 0 };
+
+// 按容器实际大小自适应 canvas（保持正方形），内部用固定高分辨率保证放大清晰。
+function resizeWorldCanvas() {
   const wrap = worldCanvas.parentElement;
   if (!wrap) return;
   const avail = Math.min(wrap.clientWidth, wrap.clientHeight);
   const size = Math.max(120, Math.floor(avail));
   worldCanvas.style.width = size + 'px';
   worldCanvas.style.height = size + 'px';
-  // 内部像素取网格尺寸的整数倍，保证格子不模糊
-  const scale = Math.max(1, Math.floor(size / Math.max(gw, gh)));
-  const px = Math.max(gw, gh) * scale;
+  // 内部像素固定 1024×1024，放大时格子仍清晰（不随网格尺寸变化）
+  const px = 1024;
   if (worldCanvas.width !== px || worldCanvas.height !== px) {
     worldCanvas.width = px;
     worldCanvas.height = px;
@@ -174,57 +178,42 @@ function resizeWorldCanvas(gw, gh) {
 }
 
 // renderWorld(snap, t)：t 为 0~1 的插值因子，用于在 prevSnapshot→snapshot 间平滑移动动物/尸体，
-// 以及平滑过渡草地/河流颜色（降雨量、水量、草量）。
-// t=1 时等价于直接画快照终态。每帧先彻底清屏，再完整重绘背景 + actors，杜绝拖影。
+// 以及平滑过渡草地/河流颜色。支持视口缩放/平移：只渲染视口内的格子。
 function renderWorld(snap, t) {
-  const gw = snap.width || GRID;    // 用后端返回的真实宽高
+  const gw = snap.width || GRID;
   const gh = snap.height || GRID;
-  resizeWorldCanvas(gw, gh);
+  resizeWorldCanvas();
   const w = worldCanvas.width, h = worldCanvas.height;
-  const cellW = w / gw;
-  const cellH = h / gh;
-
   const k = t === undefined ? 1 : t;
-  // 彻底清屏（覆盖 putImageData 可能的 1px 舍入缝隙）
+
+  // 视口计算：zoom 决定可见网格数，cx/cy 决定视口中心
+  const zoom = Math.max(1, view.zoom);
+  const visW = gw / zoom;   // 水平可见网格数
+  const visH = gh / zoom;   // 垂直可见网格数
+  // 钳制视口中心，避免平移出界
+  view.cx = Math.min(Math.max(view.cx, visW / 2), gw - visW / 2);
+  view.cy = Math.min(Math.max(view.cy, visH / 2), gh - visH / 2);
+  // 视口覆盖的网格范围（浮点边界）
+  const vx0 = view.cx - visW / 2;
+  const vy0 = view.cy - visH / 2;
+  // 格子像素大小：画布像素 / 可见网格数（放大时格子变大）
+  const cellW = w / visW;
+  const cellH = h / visH;
+
   wctx.clearRect(0, 0, w, h);
-  drawTerrain(snap, k, gw, gh, w, h, cellW, cellH);
-  drawActors(snap, k, cellW, cellH);
-  drawRain(snap, k, w, h, cellW, cellH);
+  drawTerrain(snap, k, gw, gh, w, h, cellW, cellH, vx0, vy0);
+  drawActors(snap, k, cellW, cellH, vx0, vy0);
+  renderMinimap(snap, gw, gh);
 }
 
-// 雨滴动画：降雨量越大，草地上蓝色小点越多（闪烁代表下雨）。
-// 性能：用固定上限雨滴池 + 确定性伪随机位置，每帧只画应显示数量，无额外对象分配。
-const RAIN_MAX = 200; // 雨滴池上限
-function drawRain(snap, k, w, h, cellW, cellH) {
-  // 降雨量在 prev→current 间插值，雨滴数量平滑增减
-  const prevRain = prevSnapshot && prevSnapshot.rainfall != null ? prevSnapshot.rainfall : snap.rainfall;
-  const curRain = snap.rainfall != null ? snap.rainfall : prevRain;
-  const rainfall = prevRain + (curRain - prevRain) * k;
-  if (rainfall <= 0.05) return; // 几乎无雨则不画
-  // 雨滴数随降雨量线性增长，饱和于 RAIN_MAX
-  const count = Math.round(Math.min(1, rainfall / 4) * RAIN_MAX);
-  if (count <= 0) return;
-  const now = performance.now();
-  wctx.fillStyle = 'rgba(120, 180, 255, 0.7)';
-  const size = Math.max(1, cellW * 0.15);
-  for (let i = 0; i < count; i++) {
-    // 确定性伪随机位置：用 index 哈希，避免每帧重新随机导致雨滴跳变
-    const hx = (i * 2654435761) % 1000000007;
-    const hy = (i * 40503) % 1000000007;
-    const x = (hx % 1000000007) / 1000000007 * w;
-    const y = (hy % 1000000007) / 1000000007 * h;
-    // 闪烁：按时间 + index 相位让雨滴明暗交替（雨滴下落感）
-    const phase = (now * 0.01 + i * 0.7) % 1;
-    wctx.globalAlpha = 0.25 + 0.5 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 2));
-    wctx.fillRect(x, y, size, size * 1.6);
-  }
-  wctx.globalAlpha = 1;
-}
+// 雨点：在格子像素渲染时叠加——每个草地格根据降雨量，在格内画闪烁的蓝色点表示下雨。
+// 融入 drawTerrain 的像素写入，格子级别的雨点效果（不是独立图层）。
+// 闪烁由时间相位驱动：降雨量越大，闪烁的格子越多、雨点越亮。
 
 // 绘制地形背景（草/河流的像素块）。草颜色受「草量（深浅）+ 湿度（色相绿↔黄）」双重影响：
 // 湿季葱绿、旱季枯黄，连续渐变。k 为插值因子，用于在 prev→current 快照间平滑过渡
 // 降雨量/水量/草量，避免颜色跳变闪烁。
-function drawTerrain(snap, k, gw, gh, w, h, cellW, cellH) {
+function drawTerrain(snap, k, gw, gh, w, h, cellW, cellH, vx0, vy0) {
   const img = wctx.createImageData(w, h);
   const data = img.data;
   const terrain = snap.terrain || null;
@@ -236,8 +225,16 @@ function drawTerrain(snap, k, gw, gh, w, h, cellW, cellH) {
   const curRain = snap.rainfall != null ? snap.rainfall : prevRain;
   const rain = prevRain + (curRain - prevRain) * k;
   const wet = Math.max(0, Math.min(1, rain / 4));
-  for (let gy = 0; gy < gh; gy++) {
-    for (let gx = 0; gx < gw; gx++) {
+  // 雨点闪烁：每个格子用独立频率与相位（多频叠加），产生自然不规则的明暗变化，
+  // 避免全局同步的脉冲式闪烁。
+  const now = performance.now() * 0.001; // 秒
+  // 视口覆盖的整数格子范围（只渲染可见格子）
+  const gx0 = Math.max(0, Math.floor(vx0));
+  const gy0 = Math.max(0, Math.floor(vy0));
+  const gx1 = Math.min(gw, Math.ceil(vx0 + w / cellW));
+  const gy1 = Math.min(gh, Math.ceil(vy0 + h / cellH));
+  for (let gy = gy0; gy < gy1; gy++) {
+    for (let gx = gx0; gx < gx1; gx++) {
       const idx = gy * gw + gx;
       // 草量/水量在 prev→current 间插值
       const grass = prevGrass
@@ -276,13 +273,60 @@ function drawTerrain(snap, k, gw, gh, w, h, cellW, cellH) {
         b *= (1 - n * 0.4);
         r = Math.min(255, r); gg = Math.min(255, gg); b = Math.min(255, b);
       }
-      const x0 = Math.round(gx * cellW);
-      const y0 = Math.round(gy * cellH);
-      const x1 = Math.round((gx + 1) * cellW);
-      const y1 = Math.round((gy + 1) * cellH);
+      // 像素坐标 = 网格坐标减去视口偏移，再乘以格子大小
+      const x0 = Math.round((gx - vx0) * cellW);
+      const y0 = Math.round((gy - vy0) * cellH);
+      const x1 = Math.round((gx + 1 - vx0) * cellW);
+      const y1 = Math.round((gy + 1 - vy0) * cellH);
+
+      // 雨点：仅在草地格（非河流）叠加，格子中心附近一个闪烁的蓝色点表示下雨。
+      // 用格子坐标哈希得到确定性随机，结合时间相位和降雨量决定该格此刻是否闪雨点。
+      let dropOn = false;
+      let dropR = 0, dropG = 0, dropB = 0, dropCx = 0, dropCy = 0, dropR2 = 0;
+      if (terrain[idx] !== 1 && rain > 1.0) {
+        // 确定性哈希：格子坐标 → 0~1 稳定随机
+        const h = ((gx * 73856093) ^ (gy * 19349663)) >>> 0;
+        const cellRand = (h % 1000) / 1000;
+        // 降雨量决定活跃比例：rain/12（密度减半），饱和上限 0.33，避免整图铺满
+        const active = cellRand < Math.min(0.33, rain / 12);
+        if (active) {
+          // 每个格子独立频率与相位，两个正弦相乘形成不规则包络（拍频），
+          // 产生自然的"时亮时暗"闪烁，而非全局同步脉冲。
+          const f1 = 1.5 + cellRand * 3.5;           // 第一频率 1.5~5 Hz
+          const f2 = 4.0 + cellRand * 6.0;           // 第二频率 4~10 Hz
+          const p1 = cellRand * 6.283;               // 独立相位
+          const p2 = (cellRand * 7.3) % 6.283;
+          const wave = Math.sin(now * f1 * 6.283 + p1) * Math.sin(now * f2 * 6.283 + p2);
+          // 归一化到 0~1，只有正半波较强时才显示雨点
+          const bright = Math.max(0, wave);
+          if (bright > 0.35) {
+            dropOn = true;
+            const a = bright;
+            dropR = 70 + 40 * a;    // 柔和蓝
+            dropG = 120 + 30 * a;
+            dropB = 200;
+            dropCx = (x0 + x1) / 2;
+            dropCy = (y0 + y1) / 2;
+            const rr = Math.max(1, cellW * 0.16);
+            dropR2 = rr * rr;
+          }
+        }
+      }
+
       for (let py = y0; py < y1; py++) {
         for (let px = x0; px < x1; px++) {
           const o = (py * w + px) * 4;
+          if (dropOn) {
+            const dx = px - dropCx;
+            const dy = py - dropCy;
+            if (dx * dx + dy * dy <= dropR2) {
+              data[o] = dropR;
+              data[o + 1] = dropG;
+              data[o + 2] = dropB;
+              data[o + 3] = 255;
+              continue;
+            }
+          }
           data[o] = r;
           data[o + 1] = gg;
           data[o + 2] = b;
@@ -320,7 +364,8 @@ svgImages.egg.src = 'icon/鳄鱼蛋.svg';
 svgImages.corpse.src = 'icon/尸体.svg';
 
 // 绘制尸体和动物（t 为插值因子，0=上一快照位置，1=当前快照位置）
-function drawActors(snap, t, cellW, cellH) {
+// vx0/vy0 为视口左上角网格坐标，坐标减去偏移后映射到画布。
+function drawActors(snap, t, cellW, cellH, vx0, vy0) {
   // 尸体（灰色小点）：同样按 ID 插值
   if (snap.corpses != null) {
     const prevC = prevSnapshot && prevSnapshot.corpses ? indexById(prevSnapshot.corpses) : null;
@@ -331,8 +376,8 @@ function drawActors(snap, t, cellW, cellH) {
         cx = p.x + (c.x - p.x) * t;
         cy = p.y + (c.y - p.y) * t;
       }
-      const px = cx * cellW + cellW / 2;
-      const py = cy * cellH + cellH / 2;
+      const px = (cx - vx0) * cellW + cellW / 2;
+      const py = (cy - vy0) * cellH + cellH / 2;
       
       // 绘制尸体 SVG
       wctx.save();
@@ -346,8 +391,8 @@ function drawActors(snap, t, cellW, cellH) {
   // 鳄鱼蛋（浅色小点）
   if (snap.eggs != null) {
     for (const e of snap.eggs) {
-      const px = e.x * cellW + cellW / 2;
-      const py = e.y * cellH + cellH / 2;
+      const px = (e.x - vx0) * cellW + cellW / 2;
+      const py = (e.y - vy0) * cellH + cellH / 2;
       
       // 绘制鳄鱼蛋 SVG
       wctx.save();
@@ -367,8 +412,8 @@ function drawActors(snap, t, cellW, cellH) {
       ax = p.x + (a.x - p.x) * t;
       ay = p.y + (a.y - p.y) * t;
     }
-    const px = ax * cellW + cellW / 2;
-    const py = ay * cellH + cellH / 2;
+    const px = (ax - vx0) * cellW + cellW / 2;
+    const py = (ay - vy0) * cellH + cellH / 2;
     
     // 根据动物种类选择对应的 SVG
     let image;
@@ -387,6 +432,50 @@ function drawActors(snap, t, cellW, cellH) {
     wctx.drawImage(image, -image.width/2, -image.height/2);
     wctx.restore();
   }
+}
+
+// 渲染缩略图：显示完整世界 + 当前视口矩形框。仅放大（zoom>1）时显示。
+function renderMinimap(snap, gw, gh) {
+  const show = view.zoom > 1.01;
+  minimapCanvas.style.display = show ? 'block' : 'none';
+  if (!show) return;
+
+  const mw = minimapCanvas.width, mh = minimapCanvas.height;
+  // 用当前快照数据绘制低分辨率缩略图（草量+河流+淤泥）
+  const terrain = snap.terrain || null;
+  const grass = snap.grass || null;
+  const water = snap.water || null;
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      const gx = Math.floor(x / mw * gw);
+      const gy = Math.floor(y / mh * gh);
+      const idx = gy * gw + gx;
+      let r, g, b;
+      if (terrain && terrain[idx] === 1) {
+        const wl = water ? water[idx] : 100;
+        if (wl < 15) { r = 90; g = 70; b = 45; }      // 淤泥
+        else { r = 20; g = 60; b = 130; }              // 深蓝
+      } else {
+        const gr = Math.min(1, (grass[idx] || 0) / 100);
+        r = 30 + gr * 60;
+        g = 80 + gr * 90;
+        b = 30 + gr * 20;
+      }
+      mctx.fillStyle = `rgb(${r},${g},${b})`;
+      mctx.fillRect(x, y, 1, 1);
+    }
+  }
+  // 视口矩形框
+  const zoom = Math.max(1, view.zoom);
+  const vw = gw / zoom, vh = gh / zoom;
+  const vx0 = view.cx - vw / 2, vy0 = view.cy - vh / 2;
+  const rx = vx0 / gw * mw;
+  const ry = vy0 / gh * mh;
+  const rw = vw / gw * mw;
+  const rh = vh / gh * mh;
+  mctx.strokeStyle = '#ffffff';
+  mctx.lineWidth = 1.5;
+  mctx.strokeRect(rx, ry, rw, rh);
 }
 
 // ---------- 种群曲线 ----------
@@ -534,6 +623,76 @@ document.addEventListener('keydown', (e) => {
   } else if (e.code === 'KeyS') {
     doStep();
   }
+});
+
+// ---------- 视口缩放/平移 ----------
+// 滚轮缩放：围绕鼠标位置缩放，zoom 范围 1~16
+worldCanvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (!snapshot) return;
+  const gw = snapshot.width || GRID;
+  const gh = snapshot.height || GRID;
+  const rect = worldCanvas.getBoundingClientRect();
+  // 鼠标在画布上的比例位置 → 对应网格坐标
+  const mx = (e.clientX - rect.left) / rect.width;
+  const my = (e.clientY - rect.top) / rect.height;
+  const visW = gw / Math.max(1, view.zoom);
+  const visH = gh / Math.max(1, view.zoom);
+  const gridX = view.cx - visW / 2 + mx * visW;
+  const gridY = view.cy - visH / 2 + my * visH;
+  // 缩放
+  const factor = e.deltaY < 0 ? 1.25 : 0.8;
+  view.zoom = Math.min(16, Math.max(1, view.zoom * factor));
+  // 保持鼠标指向的网格点不动
+  const newVisW = gw / view.zoom;
+  const newVisH = gh / view.zoom;
+  view.cx = gridX - (mx - 0.5) * newVisW;
+  view.cy = gridY - (my - 0.5) * newVisH;
+  if (snapshot) renderWorld(snapshot, 1);
+}, { passive: false });
+
+// 拖拽平移
+let dragging = false;
+let dragStartX = 0, dragStartY = 0, dragStartCx = 0, dragStartCy = 0;
+worldCanvas.addEventListener('mousedown', (e) => {
+  dragging = true;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  dragStartCx = view.cx;
+  dragStartCy = view.cy;
+  worldCanvas.style.cursor = 'grabbing';
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragging || !snapshot) return;
+  const gw = snapshot.width || GRID;
+  const gh = snapshot.height || GRID;
+  const rect = worldCanvas.getBoundingClientRect();
+  const visW = gw / view.zoom;
+  const visH = gh / view.zoom;
+  // 鼠标移动的屏幕像素 → 网格距离
+  const dx = (e.clientX - dragStartX) / rect.width * visW;
+  const dy = (e.clientY - dragStartY) / rect.height * visH;
+  view.cx = dragStartCx - dx;
+  view.cy = dragStartCy - dy;
+  if (snapshot) renderWorld(snapshot, 1);
+});
+window.addEventListener('mouseup', () => {
+  dragging = false;
+  worldCanvas.style.cursor = 'grab';
+});
+worldCanvas.style.cursor = 'grab';
+
+// 缩略图点击跳转视口
+minimapCanvas.addEventListener('click', (e) => {
+  if (!snapshot) return;
+  const gw = snapshot.width || GRID;
+  const gh = snapshot.height || GRID;
+  const rect = minimapCanvas.getBoundingClientRect();
+  const fx = (e.clientX - rect.left) / rect.width;
+  const fy = (e.clientY - rect.top) / rect.height;
+  view.cx = fx * gw;
+  view.cy = fy * gh;
+  if (snapshot) renderWorld(snapshot, 1);
 });
 
 // ---------- 窗口尺寸变化时重新自适应并重绘 ----------

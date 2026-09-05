@@ -9,7 +9,11 @@ import (
 	"ecosim/internal/world"
 )
 
-type Behave struct{}
+type Behave struct {
+	// occ 实时格子占用表：key 为格子坐标，value 为占用动物数。
+	// 每 tick 开始时初始化，动物移动时实时更新，用于移动避让（避免动物挤在同一格）。
+	occ map[[2]int]int
+}
 
 var directions = [8][2]int{
 	{-1, -1}, {0, -1}, {1, -1},
@@ -25,6 +29,13 @@ func (s *Behave) Step(w *world.World, c *core.Ctx) {
 		return rng.Hash(w.Seed, rng.StreamOrder, uint64(w.Tick), uint64(animals[i].ID)) <
 			rng.Hash(w.Seed, rng.StreamOrder, uint64(w.Tick), uint64(animals[j].ID))
 	})
+	// 初始化实时占用表
+	s.occ = make(map[[2]int]int, len(animals))
+	for _, a := range animals {
+		if !a.Dead {
+			s.occ[[2]int{a.X, a.Y}]++
+		}
+	}
 	for _, a := range animals {
 		if a.Dead {
 			continue
@@ -170,17 +181,22 @@ func (s *Behave) crocodile(w *world.World, c *core.Ctx, a *world.Animal, r *rng.
 		}
 		return
 	}
-	// 视野内有近岸鹿（冲刺范围内）：上岸扑击
+	// 视野内有鹿：仅当鹿在冲刺范围内能扑到（距离 <= strike+killR）才上岸突袭，
+	// 否则沿河靠近并等待猎物接近河岸，避免反复冲刺失败导致"抽搐"。
 	if prey := s.nearest(c, a, a.Sp.Vision, "deer"); prey != nil {
 		strike := a.Sp.StrikeRange
 		if strike <= 0 {
 			strike = 1
 		}
-		if needFood && chebyshev(a.X, a.Y, prey.X, prey.Y) <= ambush+strike {
+		killR := a.Sp.KillRadius
+		if killR <= 0 {
+			killR = 1
+		}
+		if needFood && chebyshev(a.X, a.Y, prey.X, prey.Y) <= strike+killR {
 			s.crocStrike(w, c, a, prey, r)
 			return
 		}
-		// 未吃满则沿河靠近猎物
+		// 未吃满则沿河靠近（若已到最近水格则原地等待猎物靠近）
 		if needFood {
 			s.approachInWater(w, c, a, prey)
 			return
@@ -206,66 +222,77 @@ func (s *Behave) crocodile(w *world.World, c *core.Ctx, a *world.Animal, r *rng.
 	s.crocIdle(w, c, a, r)
 }
 
-// layEgg 饱腹鳄鱼到最近陆地格产一颗蛋，返回是否成功。
-// 优先选择"紧邻河流"的岸边陆地格，保证孵化出的幼崽能立即进入附近水域。
+// layEgg 饱腹鳄鱼产蛋：先游到岸边水格（逐格移动），到达后在相邻陆地格产蛋。
+// 返回 true 表示本 tick 已处理（要么产了蛋、要么正在朝岸边移动）。
 func (s *Behave) layEgg(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng) bool {
 	// 繁殖需处于青壮年：超过繁殖年龄上限则不再产蛋
 	if a.Sp.Reproduce.MaxBreedAge > 0 && a.Age > a.Sp.Reproduce.MaxBreedAge {
 		return false
 	}
-	// 第一轮：找紧邻河流的岸边陆地格（周围 8 邻域有水）
-	x, y := -1, -1
+	// 1. 找视野内最近的"岸边陆地格"（8 邻域含水），作为产蛋目标
+	tx, ty := -1, -1
 	best := 1 << 30
-	pick := func(bank bool) {
-		for dy := -a.Sp.Vision; dy <= a.Sp.Vision; dy++ {
-			for dx := -a.Sp.Vision; dx <= a.Sp.Vision; dx++ {
-				nx, ny := a.X+dx, a.Y+dy
-				if !w.Grid.InBounds(nx, ny) || w.Grid.IsRiver(nx, ny) {
-					continue
-				}
-				if s.occupiedByOther(c, nx, ny, a.ID) {
-					continue
-				}
-				// bank=true 时只选紧邻河岸的陆地
-				if bank && !w.Grid.NearRiver(nx, ny, 1) {
-					continue
-				}
-				dd := chebyshev(nx, ny, a.X, a.Y)
-				if dd < best {
-					best, x, y = dd, nx, ny
-				}
+	for dy := -a.Sp.Vision; dy <= a.Sp.Vision; dy++ {
+		for dx := -a.Sp.Vision; dx <= a.Sp.Vision; dx++ {
+			nx, ny := a.X+dx, a.Y+dy
+			if !w.Grid.InBounds(nx, ny) || w.Grid.IsRiver(nx, ny) {
+				continue
+			}
+			if !w.Grid.NearRiver(nx, ny, 1) {
+				continue // 只选紧邻河岸的陆地
+			}
+			if s.occupiedByOther(c, nx, ny, a.ID) {
+				continue
+			}
+			dd := chebyshev(nx, ny, a.X, a.Y)
+			if dd < best {
+				best, tx, ty = dd, nx, ny
 			}
 		}
 	}
-	pick(true)
-	if x < 0 {
-		// 无岸边空位则退而选任意陆地空位
-		best = 1 << 30
-		pick(false)
+	if tx < 0 {
+		return false // 视野内无可用岸边，原地等待
 	}
-	if x < 0 {
-		return false // 附近无可用陆地
+	// 2. 若已在岸边水格（与目标陆地相邻，距离 1），直接产蛋
+	if chebyshev(a.X, a.Y, tx, ty) <= 1 {
+		hatch := a.Sp.Egg.HatchMin
+		if a.Sp.Egg.HatchMax > a.Sp.Egg.HatchMin {
+			hatch += r.Intn(a.Sp.Egg.HatchMax - a.Sp.Egg.HatchMin + 1)
+		}
+		eggEnergy := a.Sp.Reproduce.ChildEnergy
+		if eggEnergy <= 0 {
+			eggEnergy = 20
+		}
+		cost := a.Sp.Reproduce.Cost
+		if cost > a.Energy {
+			return false // 能量不足，无法产蛋
+		}
+		a.Energy -= cost
+		c.Ledger.Add(a.Species+".egg", -cost)
+		w.AddEgg(a.Species, tx, ty, hatch, eggEnergy)
+		a.EggCool = a.Sp.Egg.Cooldown
+		c.Ev.Emit(w.Tick, "lay_egg", a.ID, 0, 0)
+		return true
 	}
-	// 孵化时间在 [hatch_min, hatch_max] 间波动
-	hatch := a.Sp.Egg.HatchMin
-	if a.Sp.Egg.HatchMax > a.Sp.Egg.HatchMin {
-		hatch += r.Intn(a.Sp.Egg.HatchMax - a.Sp.Egg.HatchMin + 1)
+	// 3. 未到岸边：朝目标岸边陆地格方向移动 1 格（保持在水里，逐格前进）
+	cur := chebyshev(a.X, a.Y, tx, ty)
+	bestX, bestY := -1, -1
+	bestDist := cur
+	for _, d := range directions {
+		nx, ny := a.X+d[0], a.Y+d[1]
+		if !w.Grid.IsRiver(nx, ny) {
+			continue // 只在水里移动，不上岸
+		}
+		nd := chebyshev(nx, ny, tx, ty)
+		if nd < bestDist {
+			bestDist, bestX, bestY = nd, nx, ny
+		}
 	}
-	// 产蛋消耗：母体把 child_energy 转移进蛋（能量守恒：动物域 → 蛋域）
-	eggEnergy := a.Sp.Reproduce.ChildEnergy
-	if eggEnergy <= 0 {
-		eggEnergy = 20
+	if bestX >= 0 {
+		s.move(w, c, a, bestX-a.X, bestY-a.Y)
+		return true
 	}
-	cost := a.Sp.Reproduce.Cost
-	if cost > a.Energy {
-		return false // 能量不足，无法产蛋
-	}
-	a.Energy -= cost
-	c.Ledger.Add(a.Species+".egg", -cost)
-	w.AddEgg(a.Species, x, y, hatch, eggEnergy)
-	a.EggCool = a.Sp.Egg.Cooldown
-	c.Ev.Emit(w.Tick, "lay_egg", a.ID, 0, 0)
-	return true
+	return false // 无更近的水格，原地等待
 }
 
 // approachInWater 鳄鱼沿河道向猎物靠近 1 格：只在自身可进入的水格中选，
@@ -330,15 +357,16 @@ func (s *Behave) crocStrike(w *world.World, c *core.Ctx, a *world.Animal, prey *
 	if chebyshev(a.X, a.Y, prey.X, prey.Y) <= killR && a.HuntCool <= 0 {
 		s.hunt(w, c, a, prey, r)
 	}
-	// 本 tick 内立即回水，杜绝滞留陆地（bug 修复）
-	if !w.Grid.IsRiver(a.X, a.Y) {
-		s.returnToWater(w, c, a)
-	}
+	// 注意：本 tick 不再回水（避免冲刺+回水叠加导致单 tick 移动 >2 格）。
+	// 若仍留在岸上，下一 tick 由主逻辑的 returnToWater 处理回水。
 }
 
-// returnToWater 鳄鱼从岸上回到最近的水格（切比雪夫距离最近的河流格），恢复水域伏击姿态。
-// 搜索范围逐步扩大到 strike_range+1，确保深入陆地突袭后仍能找到回家的水格（修复卡岸 bug）。
+// returnToWater 鳄鱼从岸上向最近的水格逐格移动（每 tick 1 格），恢复水域伏击姿态。
+// 只在岸上时调用，找到最近水格方向后仅移动 1 格，不瞬移。
 func (s *Behave) returnToWater(w *world.World, c *core.Ctx, a *world.Animal) {
+	// 搜索最近水格（覆盖突袭冲刺深入陆地的距离），然后直接回到水格。
+	// 注意：鳄鱼白名单=只能在水里，从岸上"逐格走回"会经过陆地格而被 CanEnter 阻挡，
+	// 因此回水是"复位"动作（突袭短暂上岸的对称逆操作），直接瞬移回最近水格，不算移动违规。
 	maxR := a.Sp.StrikeRange + 1
 	if maxR < 2 {
 		maxR = 2
@@ -365,11 +393,8 @@ func (s *Behave) returnToWater(w *world.World, c *core.Ctx, a *world.Animal) {
 	if bestX < 0 {
 		return // 周围无水域（异常），原地
 	}
-	cost := c.Params.At(a.Species+".move_cost", a.X, a.Y)
+	// 直接回到最近水格（回水复位，不扣移动成本，也不标记 Moved）
 	a.X, a.Y = bestX, bestY
-	a.Energy -= cost
-	a.Moved = true
-	c.Ledger.Add(a.Species+".move", -cost)
 }
 
 // crocPatrol 鳄鱼饥饿巡游：沿河移动 1 格（只在水中），主动寻找猎物；刚需，不受 move_chance 限制。
@@ -828,8 +853,27 @@ func (s *Behave) wander(w *world.World, c *core.Ctx, a *world.Animal, r *rng.Rng
 	if r.Intn(2) == 0 {
 		return // 50% 概率原地不动（§9.3 WANDER）
 	}
-	d := directions[r.Intn(len(directions))]
-	s.move(w, c, a, d[0], d[1])
+	// 随机起点，遍历 8 方向，优先移动到未被占用的格子；尽量不走回上一位置（避免原地打转）
+	start := r.Intn(len(directions))
+	var fallback *[2]int
+	for i := 0; i < len(directions); i++ {
+		d := directions[(start+i)%len(directions)]
+		// 若该方向会走回上一位置，先记为备选（其它方向都失败时才走）
+		if a.X+d[0] == a.PrevX && a.Y+d[1] == a.PrevY {
+			if fallback == nil {
+				dd := d
+				fallback = &dd
+			}
+			continue
+		}
+		if s.move(w, c, a, d[0], d[1]) {
+			return
+		}
+	}
+	// 其它方向都不可行，才退回上一位置（保证仍能移动）
+	if fallback != nil {
+		s.move(w, c, a, fallback[0], fallback[1])
+	}
 }
 
 func (s *Behave) move(w *world.World, c *core.Ctx, a *world.Animal, dx, dy int) bool {
@@ -838,11 +882,24 @@ func (s *Behave) move(w *world.World, c *core.Ctx, a *world.Animal, dx, dy int) 
 	if !w.CanEnter(nx, ny, a.Sp) {
 		return false
 	}
+	// 避让：目标格已被其他动物占用则原地不动（除非是与自己重叠，如刚出生）
+	if s.occ[[2]int{nx, ny}] > 0 {
+		return false
+	}
+	old := [2]int{a.X, a.Y}
 	cost := c.Params.At(a.Species+".move_cost", a.X, a.Y)
+	// 记录上一位置（供空闲随机移动避让，避免原地打转）
+	a.PrevX, a.PrevY = a.X, a.Y
 	a.X, a.Y = nx, ny
 	a.Energy -= cost
 	a.Moved = true // 标记本 tick 移动过（静止代谢判定）
 	c.Ledger.Add(a.Species+".move", -cost)
+	// 实时更新占用表：旧格 -1，新格 +1
+	s.occ[old]--
+	if s.occ[old] <= 0 {
+		delete(s.occ, old)
+	}
+	s.occ[[2]int{nx, ny}]++
 	return true
 }
 

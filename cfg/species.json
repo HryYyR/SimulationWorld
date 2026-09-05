@@ -27,14 +27,14 @@
     "blocked_terrains": ["river"]
   },
   "tiger": {
-    "vision": 8,
+    "vision": 10,
     "kill_radius": 2,
-    "hunt_cooldown": 40,
-    "move_cost": 0.8,
-    "metabolism": 2.1,
+    "hunt_cooldown": 90,
+    "move_cost": 0.2,
+    "metabolism": 1.4,
     "hunt": {
       "success": 0.35,
-      "gain": 55,
+      "gain": 65,
       "fail_tiger_cost": 2,
       "fail_deer_cost": 1,
       "flee_jump": 2
@@ -44,7 +44,7 @@
       "cooldown": 100,
       "cost": 40,
       "child_energy": 40,
-      "mature_age": 50,
+      "mature_age": 90,
       "max_breed_age": 300,
       "mating_mode": "asexual",
       "nurse_ratio": 0.3
@@ -69,7 +69,7 @@
     "ambush_radius": 2,
     "strike_range": 2,
     "hunt": {
-      "success": 0.75,
+      "success": 0.95,
       "gain": 70,
       "fail_tiger_cost": 3,
       "fail_deer_cost": 2,
@@ -80,7 +80,7 @@
       "cooldown": 999999,
       "cost": 30,
       "child_energy": 72,
-      "mature_age": 80,
+      "mature_age": 180,
       "max_breed_age": 350,
       "mating_mode": "asexual",
       "nurse_ratio": 0

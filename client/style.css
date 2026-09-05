@@ -113,6 +113,7 @@ body {
 .world-canvas-wrap {
   flex: 1;
   min-height: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -124,6 +125,18 @@ body {
   border-radius: 4px;
   image-rendering: pixelated;
   background: #0a0f0a;
+}
+#minimap {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 120px;
+  height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #0a0f0a;
+  cursor: pointer;
+  display: none;
 }
 
 .side {

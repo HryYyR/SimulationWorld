@@ -363,6 +363,8 @@ func StateHash(w *world.World) uint64 {
 		putFloat(a.Energy)
 		put(uint64(a.Lifespan))
 		put(uint64(a.Cooldown))
+		put(uint64(a.PrevX))
+		put(uint64(a.PrevY))
 		if a.Dead {
 			put(1)
 		} else {

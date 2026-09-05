@@ -126,6 +126,8 @@ type Animal struct {
 	HuntCool int // 捕杀冷却剩余 tick：捕杀后需休息，避免连续屠戮周围鹿
 	EggCool  int // 产蛋冷却剩余 tick：产蛋后需间隔，避免每 tick 连续产蛋
 	Moved    bool // 本 tick 是否发生过移动（供"静止代谢更低"判定，每 tick 由 Behave 清零）
+	PrevX    int  // 上一 tick 所在格（空闲随机移动时尽量不走回，避免原地打转）
+	PrevY    int
 	Sp       *config.Species // 物种静态参数缓存（避免每 tick 字符串拼接查表）
 }
 
@@ -554,6 +556,7 @@ func (w *World) CanEnter(x, y int, sp *config.Species) bool {
 
 func (w *World) AddAnimal(species string, sp *config.Species, x, y int, energy float64, lifespan int) *Animal {
 	a := &Animal{ID: w.NextID, Species: species, X: x, Y: y, Energy: energy, Lifespan: lifespan, Sp: sp}
+	a.PrevX, a.PrevY = x, y // 初始上一位置=出生位置（无历史路径）
 	w.NextID++
 	w.Animals = append(w.Animals, a)
 	w.byID[a.ID] = a
